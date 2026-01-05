@@ -6,13 +6,30 @@ Cloudflare内で完結する、家族向けの家計簿Webアプリです。無�
 - インフラはCloudflare内に収める（Workers、D1、必要ならDurable Objects）。
 - Google OAuthで家族だけが使えるようにする。
 - オンライン前提だが、オフライン耐性と手動同期を用意する。
-- スマホ入力UIと、PCでの詳細確認（将来CSV I/O）を用意する。
+- スマホ用とPC用のUIを分けて実装する。
+- スマホは入力中心、PCは詳細表示・設定・レポート・CSVを担当する。
 
 ## 技術構成（予定）
-- フロントエンド: React + Vite（PWA想定）
+- フロントエンド（スマホ）: React + Vite（PWA想定）
+- フロントエンド（PC）: React + Vite
 - バックエンド: Cloudflare Workers + Hono
 - データベース: Cloudflare D1（SQLite）
 - 認証: Google OAuth + サーバーセッションCookie
+
+## ディレクトリ構成（想定）
+```
+kakeibo/
+├─ apps/
+│  ├─ mobile/              # スマホUI（React + Vite）
+│  ├─ pc/                  # PC UI（後で実装）
+│  └─ api/                 # Workers + Hono
+├─ packages/
+│  └─ shared/              # 型定義/共通スキーマ/ APIクライアント
+├─ docs/                   # 仕様や設計メモ
+├─ .github/                # GitHub Actions
+├─ README.md
+└─ package.json            # workspaces
+```
 
 ## 主要要件
 - 無料枠に収めるため低運用コストで進める。
@@ -20,19 +37,42 @@ Cloudflare内で完結する、家族向けの家計簿Webアプリです。無�
 - 手動の「更新」ボタンで同期（ポーリング方式）。
 - 競合検知は警告のみ（書き込みは通す、同一IDは最新更新で上書き）。
 - 月替わり時に繰り越しUIを表示する。
+- 定期的な収入・支出をルール登録できる。
+- 明細カテゴリを追加/編集/並び替えできる。
+- 支払い方法（クレジットカード、銀行口座、電子マネー）を管理できる。
+- 週/月/年の集計と円グラフのレポートを表示できる。
+- 共有編集ログを確認できる。
+- 収入/支出は entry_type で判定し、amount は正数で保持する。
 - 月次判定のタイムゾーンは Asia/Tokyo。
+- スマホは入力/閲覧に絞り、PCは設定/レポート/CSV/監査ログを提供する。
 
-## データモデル（最小）
-- entries
-  - id, family_id, amount, category_id, memo, occurred_at
-  - created_at, updated_at
-- monthly_balance
-  - family_id, ym (YYYY-MM)
-  - balance, is_closed, updated_at
-- categories
-  - id, family_id, name, type
-- members
-  - user_id, family_id, role
+## データモデル（概要）
+- entries: 収入/支出の明細を保持する本体テーブル。
+  - 主な項目: id, family_id, entry_type, amount, entry_category_id, payment_method_id
+  - 付随項目: memo, occurred_at, recurring_rule_id, created_at, updated_at
+- monthly_balance: 月初の繰り越し残高を保持する。
+  - 主な項目: family_id, ym (YYYY-MM), balance, is_closed, updated_at
+- recurring_rules: 定期収入/支出のルールを保持する。
+  - 主な項目: id, family_id, entry_type, amount, entry_category_id, payment_method_id
+  - 付随項目: memo, frequency, day_of_month, start_at, end_at, is_active
+  - 付随項目: created_at, updated_at
+- entry_categories: 明細の分類（家族単位で管理）。
+  - 主な項目: id, family_id, name, type
+- payment_methods: 支払い方法（カード/銀行口座/電子マネー）。
+  - 主な項目: id, family_id, name, type
+- members: 家族のメンバー管理。
+  - 主な項目: user_id, family_id, role
+- audit_logs: 共有編集ログ（誰が何をしたか）。
+  - 主な項目: id, family_id, actor_user_id, action, target_type, target_id
+  - 付随項目: summary, created_at
+
+## 収支区分（entry_type）
+- `entry_type` は `income` / `expense` を想定する。
+- `amount` は常に正数で保持し、収支の判定は `entry_type` で行う。
+
+## 集計/レポート
+- 週/月/年の集計とカテゴリ別の円グラフを表示する（PC側）。
+- 集計は `entries` を基に算出し、必要に応じてサーバー側でキャッシュする。
 
 ## データフロー（ツリー）
 ```
@@ -62,15 +102,37 @@ Cloudflare内で完結する、家族向けの家計簿Webアプリです。無�
 ├─ outboxに追加（delete）
 └─ 即送信トライ（成功/失敗処理は同じ）
 │
+明細カテゴリ管理
+├─ 追加/編集/削除
+├─ IndexedDBを即更新
+├─ outboxに追加
+└─ 即送信トライ（成功/失敗処理は同じ）
+│
+支払い方法管理
+├─ 追加/編集/削除
+├─ IndexedDBを即更新
+├─ outboxに追加
+└─ 即送信トライ（成功/失敗処理は同じ）
+│
+定期収入・支出（ルール）
+├─ ルール登録/編集/停止
+├─ IndexedDBを即更新
+├─ outboxに追加
+└─ 即送信トライ（成功/失敗処理は同じ）
+│
 手動同期（更新ボタン）
 ├─ outboxを順次送信（POST/PATCH/DELETE）
 ├─ 競合判定（updated_at）
 │  └─ 警告フラグのみ返却（同一IDは最新更新で上書き）
+├─ サーバー側で編集ログを記録
 └─ 差分取得: GET /entries?since=last_sync
    └─ IndexedDBにマージ -> 画面更新
 │
 ポーリング（任意）
 └─ GET /entries?since=last_sync（未設定ならフルフェッチ）-> マージ -> 画面更新
+│
+レポート表示
+└─ GET /reports?range=week|month|year -> 集計/グラフ用データ表示
 │
 オフライン時
 ├─ すべてローカル保存 + outboxへ蓄積
@@ -85,6 +147,7 @@ Cloudflare内で完結する、家族向けの家計簿Webアプリです。無�
 ├─ 起動時に月変更を検知
 ├─ 前月のbalanceを算出
 ├─ 今月のbalanceを作成
+├─ 定期ルールから当月分を生成
 └─ 繰り越し確認/調整UIを表示
 │
 過去月の編集
