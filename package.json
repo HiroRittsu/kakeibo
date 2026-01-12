@@ -1,0 +1,8 @@
+{
+  "name": "kakeibo",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}

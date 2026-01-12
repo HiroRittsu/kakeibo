@@ -1,0 +1,290 @@
+:root {
+  color-scheme: light;
+  font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic", sans-serif;
+}
+
+.app {
+  min-height: 100vh;
+  background: #f7f5f2;
+  color: #222;
+  display: flex;
+  flex-direction: column;
+}
+
+.top-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #fff4e7;
+  border-bottom: 1px solid #e7dcd1;
+}
+
+.title-group h1 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+}
+
+.subtitle {
+  display: block;
+  font-size: 11px;
+  color: #7a6b5b;
+}
+
+.icon-button {
+  background: transparent;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.primary {
+  background: #ff9b50;
+  border: none;
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.primary.full {
+  width: 100%;
+}
+
+.content {
+  flex: 1;
+  padding: 16px;
+  padding-bottom: 96px;
+}
+
+.card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+.card + .card {
+  margin-top: 16px;
+}
+
+.card.empty {
+  text-align: center;
+  color: #7a6b5b;
+}
+
+.form {
+  display: grid;
+  gap: 12px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field label {
+  font-size: 12px;
+  color: #7a6b5b;
+}
+
+input,
+select {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #e5ded4;
+  background: #fffaf4;
+  font-size: 14px;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.segmented button {
+  border: 1px solid #e4d7c9;
+  background: #fff;
+  padding: 8px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.segmented button.active {
+  background: #ff9b50;
+  color: #fff;
+  border-color: transparent;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  gap: 8px;
+}
+
+.tab-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #fff;
+  border-top: 1px solid #e5ded4;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  padding: 8px 12px 16px;
+  gap: 8px;
+}
+
+.tab-bar button {
+  background: transparent;
+  border: none;
+  font-size: 14px;
+  padding: 8px 0;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.tab-bar button.active {
+  background: #ffeddd;
+  font-weight: 600;
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  display: grid;
+  gap: 10px;
+}
+
+.list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #fff8f0;
+  border-radius: 12px;
+}
+
+.list.compact li {
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.entry-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.entry-sub {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: #7a6b5b;
+  flex-wrap: wrap;
+}
+
+.text-button {
+  background: transparent;
+  border: none;
+  color: #d05532;
+  cursor: pointer;
+}
+
+.badge {
+  font-size: 10px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #f1e3d5;
+  color: #7a6b5b;
+}
+
+.badge.income {
+  background: #d9f5e4;
+  color: #2e7a57;
+}
+
+.badge.expense {
+  background: #ffe2d9;
+  color: #b4512f;
+}
+
+.side-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 80%;
+  max-width: 320px;
+  background: #fff;
+  box-shadow: 6px 0 20px rgba(0, 0, 0, 0.12);
+  transform: translateX(-100%);
+  transition: transform 0.2s ease;
+  z-index: 10;
+  padding: 20px 16px;
+  overflow-y: auto;
+}
+
+.side-menu.open {
+  transform: translateX(0);
+}
+
+.menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.menu-section {
+  margin-bottom: 24px;
+}
+
+.report-summary {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.report-summary div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #fff8f0;
+  padding: 10px 12px;
+  border-radius: 12px;
+}
+
+.progress {
+  background: #f1e3d5;
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+}
+
+.progress span {
+  display: block;
+  height: 100%;
+  background: #ff9b50;
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 9;
+}
