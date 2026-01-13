@@ -255,6 +255,8 @@ app.post('/entry-categories', async (c) => {
 
   const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null
   const type = typeof payload.type === 'string' && payload.type.trim() ? payload.type.trim() : null
+  const iconKey = typeof payload.icon_key === 'string' ? payload.icon_key : null
+  const color = typeof payload.color === 'string' ? payload.color : null
   if (!name || !type) return c.json(jsonError('name and type are required'), 400)
 
   const id = typeof payload.id === 'string' ? payload.id : crypto.randomUUID()
@@ -264,9 +266,9 @@ app.post('/entry-categories', async (c) => {
 
   await c.env.DB
     .prepare(
-      'INSERT INTO entry_categories (id, family_id, name, type, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, sort_order = excluded.sort_order, updated_at = excluded.updated_at'
+      'INSERT INTO entry_categories (id, family_id, name, type, icon_key, color, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, icon_key = excluded.icon_key, color = excluded.color, sort_order = excluded.sort_order, updated_at = excluded.updated_at'
     )
-    .bind(id, familyId, name, type, sortOrder, createdAt, updatedAt)
+    .bind(id, familyId, name, type, iconKey, color, sortOrder, createdAt, updatedAt)
     .run()
 
   await recordAudit(c.env.DB, familyId, getActorUserId(c), 'update', 'entry_categories', id, name)

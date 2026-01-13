@@ -19,6 +19,8 @@ export type EntryCategory = {
   family_id: string
   name: string
   type: string
+  icon_key?: string | null
+  color?: string | null
   sort_order: number
   created_at: string
   updated_at: string
