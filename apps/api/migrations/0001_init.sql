@@ -1,6 +1,6 @@
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE entries (
+CREATE TABLE IF NOT EXISTS entries (
   id TEXT PRIMARY KEY,
   family_id TEXT NOT NULL,
   entry_type TEXT NOT NULL,
@@ -14,13 +14,13 @@ CREATE TABLE entries (
   updated_at TEXT NOT NULL
 );
 
-CREATE INDEX idx_entries_family_updated
+CREATE INDEX IF NOT EXISTS idx_entries_family_updated
   ON entries (family_id, updated_at);
 
-CREATE INDEX idx_entries_family_occurred
+CREATE INDEX IF NOT EXISTS idx_entries_family_occurred
   ON entries (family_id, occurred_at);
 
-CREATE TABLE monthly_balance (
+CREATE TABLE IF NOT EXISTS monthly_balance (
   family_id TEXT NOT NULL,
   ym TEXT NOT NULL,
   balance INTEGER NOT NULL,
@@ -29,7 +29,7 @@ CREATE TABLE monthly_balance (
   PRIMARY KEY (family_id, ym)
 );
 
-CREATE TABLE recurring_rules (
+CREATE TABLE IF NOT EXISTS recurring_rules (
   id TEXT PRIMARY KEY,
   family_id TEXT NOT NULL,
   entry_type TEXT NOT NULL,
@@ -46,19 +46,7 @@ CREATE TABLE recurring_rules (
   updated_at TEXT NOT NULL
 );
 
-CREATE TABLE entry_categories (
-  id TEXT PRIMARY KEY,
-  family_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  type TEXT NOT NULL,
-  icon_key TEXT,
-  color TEXT,
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE payment_methods (
+CREATE TABLE IF NOT EXISTS entry_categories (
   id TEXT PRIMARY KEY,
   family_id TEXT NOT NULL,
   name TEXT NOT NULL,
@@ -68,7 +56,17 @@ CREATE TABLE payment_methods (
   updated_at TEXT NOT NULL
 );
 
-CREATE TABLE members (
+CREATE TABLE IF NOT EXISTS payment_methods (
+  id TEXT PRIMARY KEY,
+  family_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS members (
   user_id TEXT NOT NULL,
   family_id TEXT NOT NULL,
   role TEXT NOT NULL,
@@ -77,7 +75,7 @@ CREATE TABLE members (
   PRIMARY KEY (user_id, family_id)
 );
 
-CREATE TABLE audit_logs (
+CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,
   family_id TEXT NOT NULL,
   actor_user_id TEXT NOT NULL,
@@ -88,5 +86,5 @@ CREATE TABLE audit_logs (
   created_at TEXT NOT NULL
 );
 
-CREATE INDEX idx_audit_logs_family_created
+CREATE INDEX IF NOT EXISTS idx_audit_logs_family_created
   ON audit_logs (family_id, created_at);

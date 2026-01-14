@@ -28,7 +28,8 @@ npm run migrate:remote
 ```
 
 Note: the initial migration assumes an empty database. If you already created tables,
-reset the local D1 state or create a baseline migration before applying.
+reset the local D1 state or create a baseline migration before applying. If you see
+duplicate column errors, remove the local D1 state and re-apply migrations.
 
 [For generating/synchronizing types based on your Worker configuration run](https://developers.cloudflare.com/workers/wrangler/commands/#types):
 
