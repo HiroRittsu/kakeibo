@@ -21,6 +21,8 @@ export type EntryCategory = {
   type: string
   icon_key?: string | null
   color?: string | null
+  is_archived?: number | null
+  merged_to_id?: string | null
   sort_order: number
   created_at: string
   updated_at: string
