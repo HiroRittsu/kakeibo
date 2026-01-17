@@ -674,7 +674,7 @@ select {
   color: #2f8f9d;
 }
 
-.entry-payment-overlay.card {
+.entry-payment-overlay.credit-card {
   background: #e6e9f6;
   color: #3a4bb8;
 }
@@ -734,6 +734,11 @@ select {
 .badge.planned {
   background: #e6e6e6;
   color: #6b6b6b;
+}
+
+.badge.carryover {
+  background: #e2e2e2;
+  color: #5f5f5f;
 }
 
 .month-header {
@@ -878,6 +883,19 @@ select {
 .calendar-amount.planned {
   font-size: 10px;
   color: #9a9a9a;
+}
+
+.calendar-amount.carryover {
+  font-size: 10px;
+  color: #6b6b6b;
+}
+
+.calendar-amount.carryover.income {
+  color: #2f6db4;
+}
+
+.calendar-amount.carryover.expense {
+  color: #d05532;
 }
 
 .donut {
@@ -1258,6 +1276,9 @@ select {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .icon-choice {

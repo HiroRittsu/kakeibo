@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie'
-import type { Entry, EntryCategory, PaymentMethod, RecurringRule, OutboxItem } from './types'
+import type { Entry, EntryCategory, PaymentMethod, RecurringRule, MonthlyBalance, OutboxItem } from './types'
 
 const toTokyoDateString = (value: string) => {
   const date = new Date(value)
@@ -13,6 +13,7 @@ export class KakeiboDB extends Dexie {
   entryCategories!: Table<EntryCategory, string>
   paymentMethods!: Table<PaymentMethod, string>
   recurringRules!: Table<RecurringRule, string>
+  monthlyBalances!: Table<MonthlyBalance, string>
   outbox!: Table<OutboxItem, string>
 
   constructor() {
@@ -60,6 +61,14 @@ export class KakeiboDB extends Dexie {
             }
           })
       })
+    this.version(4).stores({
+      entries: 'id, entry_type, occurred_at, occurred_on, updated_at',
+      entryCategories: 'id, sort_order, name',
+      paymentMethods: 'id, sort_order, name',
+      recurringRules: 'id, created_at',
+      monthlyBalances: 'id, ym, updated_at',
+      outbox: 'id, created_at',
+    })
   }
 }
 

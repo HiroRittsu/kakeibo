@@ -142,8 +142,13 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
 起動
 ├─ セッション確認
 │  ├─ 有効
-│  │  ├─ IndexedDBキャッシュ読込 -> 画面表示
-│  │  └─ 初回同期: GET /entries（last_syncなしならフルフェッチ）
+│  │  ├─ IndexedDBキャッシュ読込（entries / monthlyBalances など） -> 画面表示
+│  │  └─ 初回同期:
+│  │     ├─ GET /entries（last_syncなしならフルフェッチ）
+│  │     ├─ GET /entry-categories
+│  │     ├─ GET /payment-methods
+│  │     ├─ GET /recurring-rules
+│  │     └─ GET /monthly-balances?from=YYYY-MM&to=YYYY-MM
 │  └─ 無効/なし
 │     ├─ オンライン -> Google OAuth -> セッション -> キャッシュ読込 -> 初回同期
 │     └─ オフライン -> オフラインモードUI -> ローカル編集のみ許可
@@ -158,11 +163,13 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
 編集
 ├─ 履歴から明細を開き、入力画面で修正
 ├─ IndexedDBを即更新
+├─ monthlyBalances をローカル再計算（対象月〜当月）
 ├─ outboxに追加（update）
 └─ 即送信トライ（成功/失敗処理は同じ）
 │
 削除
 ├─ IndexedDBを即更新
+├─ monthlyBalances をローカル再計算（対象月〜当月）
 ├─ outboxに追加（delete）
 └─ 即送信トライ（成功/失敗処理は同じ）
 │
@@ -189,14 +196,19 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
 ├─ 競合判定（updated_at）
 │  └─ 警告フラグのみ返却（同一IDは最新更新で上書き）
 ├─ サーバー側で編集ログを記録
-└─ 差分取得: GET /entries?since=last_sync
+├─ 差分取得: GET /entries?since=last_sync
    └─ IndexedDBにマージ -> 画面更新
+├─ GET /entry-categories
+├─ GET /payment-methods
+├─ GET /recurring-rules
+└─ 月次残高取得: GET /monthly-balances?from=YYYY-MM&to=YYYY-MM
+   └─ IndexedDBに保存（monthlyBalances）
 │
 ポーリング（任意）
 └─ GET /entries?since=last_sync（未設定ならフルフェッチ）-> マージ -> 画面更新
 │
 レポート表示
-└─ GET /reports?range=week|month|year -> 集計/グラフ用データ表示
+└─ IndexedDB（entries + monthlyBalances）で集計/グラフ表示
 │
 オフライン時
 ├─ すべてローカル保存 + outboxへ蓄積
@@ -221,8 +233,10 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
 
 ## 繰り越し仕様
 - `monthly_balance` に月次の残高を保存する（balanceは1種、is_closedで締め判定）。
-- 月替わりで繰り越しを作成し、確認/調整UIを表示する。
-- 過去月の編集があれば、その月以降の残高を再計算する。
+- 繰り越しはサーバー側で再計算し、クライアントは取得して表示する。
+- 月初のCronで「先月の再計算 + 当月の monthly_balance 作成」を行う。
+- entries の作成/更新/削除時は、影響月から当月までを即時再計算する。
+- 過去月の編集があれば、その月以降の残高を再計算する（is_closedは維持）。
 
 ## セキュリティ（提案）
 - Google OAuth + PKCE（パスワードを保持しない）。

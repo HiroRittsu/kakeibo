@@ -66,6 +66,42 @@ const formatOccurredOn = (occurredAt?: string | null) => {
   return formatTokyoDate(toTokyoDate(date))
 }
 
+const formatTokyoYm = (date = new Date()) => {
+  const tokyo = toTokyoDate(date)
+  const year = tokyo.getUTCFullYear()
+  const month = `${tokyo.getUTCMonth() + 1}`.padStart(2, '0')
+  return `${year}-${month}`
+}
+
+const ymToIndex = (ym: string) => {
+  const [yearRaw, monthRaw] = ym.split('-')
+  const year = Number(yearRaw)
+  const month = Number(monthRaw)
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return 0
+  return year * 12 + (month - 1)
+}
+
+const formatYmFromIndex = (index: number) => {
+  const year = Math.floor(index / 12)
+  const month = (index % 12) + 1
+  return `${year}-${`${month}`.padStart(2, '0')}`
+}
+
+const addMonthsToYm = (ym: string, diff: number) => {
+  const nextIndex = ymToIndex(ym) + diff
+  return formatYmFromIndex(nextIndex)
+}
+
+const monthRangeFromYm = (ym: string) => {
+  const start = `${ym}-01`
+  const end = `${addMonthsToYm(ym, 1)}-01`
+  return { start, end }
+}
+
+const getYmFromDate = (value: string) => value.slice(0, 7)
+
+const minYm = (a: string, b: string) => (ymToIndex(a) <= ymToIndex(b) ? a : b)
+
 type RecurringRuleRow = {
   id: string
   family_id: string
@@ -80,6 +116,16 @@ type RecurringRuleRow = {
   start_at: string
   end_at: string | null
   is_active: number | null
+}
+
+type EntryTotalRow = {
+  entry_type: 'income' | 'expense'
+  total: number
+}
+
+type MonthlyBalanceRow = {
+  balance?: number
+  is_closed?: number
 }
 
 const getDueDay = (target: Date, ruleDay: number | null, fallback: Date) => {
@@ -105,6 +151,85 @@ const adjustForWeekend = (date: Date, adjustment: string) => {
     return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + delta))
   }
   return date
+}
+
+const recalcMonthlyBalances = async (db: D1Database, familyId: string, startYm: string) => {
+  const currentYm = formatTokyoYm()
+  const startIndex = ymToIndex(startYm)
+  const endIndex = ymToIndex(currentYm)
+  if (startIndex > endIndex) return []
+
+  const prevYm = addMonthsToYm(startYm, -1)
+  const previousBalanceRow = await db
+    .prepare('SELECT balance FROM monthly_balance WHERE family_id = ? AND ym = ?')
+    .bind(familyId, prevYm)
+    .first<MonthlyBalanceRow>()
+  let previousBalance = typeof previousBalanceRow?.balance === 'number' ? previousBalanceRow.balance : 0
+
+  const updates: { ym: string; balance: number; is_closed: number }[] = []
+
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    const ym = formatYmFromIndex(index)
+    const { start, end } = monthRangeFromYm(ym)
+    const totals = await db
+      .prepare(
+        'SELECT entry_type, SUM(amount) as total FROM entries WHERE family_id = ? AND occurred_on >= ? AND occurred_on < ? GROUP BY entry_type'
+      )
+      .bind(familyId, start, end)
+      .all<EntryTotalRow>()
+
+    let income = 0
+    let expense = 0
+    totals.results?.forEach((row) => {
+      if (row.entry_type === 'income') {
+        income = Number(row.total) || 0
+      } else if (row.entry_type === 'expense') {
+        expense = Number(row.total) || 0
+      }
+    })
+
+    const balance = previousBalance + income - expense
+    const existing = await db
+      .prepare('SELECT is_closed FROM monthly_balance WHERE family_id = ? AND ym = ?')
+      .bind(familyId, ym)
+      .first<MonthlyBalanceRow>()
+    const isClosed = existing?.is_closed === 1 ? 1 : 0
+    const updatedAt = nowIso()
+
+    await db
+      .prepare(
+        'INSERT INTO monthly_balance (family_id, ym, balance, is_closed, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(family_id, ym) DO UPDATE SET balance = excluded.balance, is_closed = ?, updated_at = excluded.updated_at'
+      )
+      .bind(familyId, ym, Math.round(balance), isClosed, updatedAt, isClosed)
+      .run()
+
+    updates.push({ ym, balance, is_closed: isClosed })
+    previousBalance = balance
+  }
+
+  return updates
+}
+
+const runMonthStartBalanceUpdate = async (db: D1Database, now = new Date()) => {
+  const tokyo = toTokyoDate(now)
+  if (tokyo.getUTCDate() !== 1) return
+
+  const currentYm = formatTokyoYm(now)
+  const prevYm = addMonthsToYm(currentYm, -1)
+
+  const familyIds = new Set<string>()
+  const entryFamilies = await db.prepare('SELECT DISTINCT family_id FROM entries').all<{ family_id: string }>()
+  entryFamilies.results?.forEach((row) => {
+    if (row.family_id) familyIds.add(row.family_id)
+  })
+  const balanceFamilies = await db.prepare('SELECT DISTINCT family_id FROM monthly_balance').all<{ family_id: string }>()
+  balanceFamilies.results?.forEach((row) => {
+    if (row.family_id) familyIds.add(row.family_id)
+  })
+
+  for (const familyId of familyIds) {
+    await recalcMonthlyBalances(db, familyId, prevYm)
+  }
 }
 
 const shouldGenerateRule = (rule: RecurringRuleRow, targetTokyo: Date, targetDate: string) => {
@@ -162,12 +287,15 @@ const generateRecurringEntries = async (db: D1Database, baseDate = new Date()) =
   const targetTokyo = toTokyoDate(baseDate)
   const targetDate = formatTokyoDate(targetTokyo)
   const occurredAt = new Date(`${targetDate}T00:00:00+09:00`).toISOString()
+  const targetYm = getYmFromDate(targetDate)
 
   const { results } = await db
     .prepare('SELECT * FROM recurring_rules WHERE is_active = 1')
     .all<RecurringRuleRow>()
 
   if (!results?.length) return
+
+  const affectedFamilies = new Map<string, string>()
 
   for (const rule of results) {
     if (!shouldGenerateRule(rule, targetTokyo, targetDate)) continue
@@ -199,7 +327,15 @@ const generateRecurringEntries = async (db: D1Database, baseDate = new Date()) =
     const changes = (result as { meta?: { changes?: number } }).meta?.changes ?? 0
     if (changes > 0) {
       await recordAudit(db, rule.family_id, 'system', 'create', 'entries', id, `recurring ${rule.id}`)
+      const existing = affectedFamilies.get(rule.family_id)
+      if (!existing || ymToIndex(targetYm) < ymToIndex(existing)) {
+        affectedFamilies.set(rule.family_id, targetYm)
+      }
     }
+  }
+
+  for (const [familyId, startYm] of affectedFamilies.entries()) {
+    await recalcMonthlyBalances(db, familyId, startYm)
   }
 }
 
@@ -283,7 +419,7 @@ app.post('/entries', async (c) => {
 
   const db = c.env.DB
   const existing = await db
-    .prepare('SELECT updated_at FROM entries WHERE id = ? AND family_id = ?')
+    .prepare('SELECT occurred_on, updated_at FROM entries WHERE id = ? AND family_id = ?')
     .bind(id, familyId)
     .first()
 
@@ -318,6 +454,11 @@ app.post('/entries', async (c) => {
     id,
     `entry ${entryType} ${amount}`
   )
+
+  const startYm = existing?.occurred_on
+    ? minYm(getYmFromDate(existing.occurred_on), getYmFromDate(occurredOn))
+    : getYmFromDate(occurredOn)
+  await recalcMonthlyBalances(db, familyId, startYm)
 
   const entry = await db
     .prepare('SELECT * FROM entries WHERE id = ? AND family_id = ?')
@@ -383,6 +524,9 @@ app.patch('/entries/:id', async (c) => {
 
   await recordAudit(db, familyId, getActorUserId(c), 'update', 'entries', id, `entry ${entryType} ${amount}`)
 
+  const startYm = minYm(getYmFromDate(existing.occurred_on), getYmFromDate(occurredOn))
+  await recalcMonthlyBalances(db, familyId, startYm)
+
   const entry = await db
     .prepare('SELECT * FROM entries WHERE id = ? AND family_id = ?')
     .bind(id, familyId)
@@ -398,8 +542,18 @@ app.delete('/entries/:id', async (c) => {
   const id = c.req.param('id')
   const db = c.env.DB
 
+  const existing = await db
+    .prepare('SELECT occurred_on FROM entries WHERE id = ? AND family_id = ?')
+    .bind(id, familyId)
+    .first<{ occurred_on?: string }>()
+
   await db.prepare('DELETE FROM entries WHERE id = ? AND family_id = ?').bind(id, familyId).run()
   await recordAudit(db, familyId, getActorUserId(c), 'delete', 'entries', id)
+
+  if (existing?.occurred_on) {
+    const startYm = getYmFromDate(existing.occurred_on)
+    await recalcMonthlyBalances(db, familyId, startYm)
+  }
 
   return c.json({ ok: true })
 })
@@ -609,6 +763,24 @@ app.get('/monthly-balance', async (c) => {
   return c.json({ monthly_balance: balance })
 })
 
+app.get('/monthly-balances', async (c) => {
+  const familyId = requireFamilyId(c)
+  if (!familyId) return c.json(jsonError('X-Family-Id is required'), 400)
+  const from = c.req.query('from')
+  const to = c.req.query('to')
+  if (!from || !to) return c.json(jsonError('from/to is required'), 400)
+  if (!/^\d{4}-\d{2}$/.test(from) || !/^\d{4}-\d{2}$/.test(to)) {
+    return c.json(jsonError('from/to must be YYYY-MM'), 400)
+  }
+
+  const balances = await c.env.DB
+    .prepare('SELECT * FROM monthly_balance WHERE family_id = ? AND ym >= ? AND ym <= ? ORDER BY ym')
+    .bind(familyId, from, to)
+    .all()
+
+  return c.json({ monthly_balances: balances.results ?? [] })
+})
+
 app.put('/monthly-balance/:ym', async (c) => {
   const familyId = requireFamilyId(c)
   if (!familyId) return c.json(jsonError('X-Family-Id is required'), 400)
@@ -738,6 +910,8 @@ export default {
   fetch: app.fetch,
   scheduled: (event: { scheduledTime?: number }, env: Bindings, ctx: ExecutionContext) => {
     const scheduledTime = typeof event.scheduledTime === 'number' ? event.scheduledTime : Date.now()
-    ctx.waitUntil(generateRecurringEntries(env.DB, new Date(scheduledTime)))
+    const scheduledDate = new Date(scheduledTime)
+    ctx.waitUntil(generateRecurringEntries(env.DB, scheduledDate))
+    ctx.waitUntil(runMonthStartBalanceUpdate(env.DB, scheduledDate))
   },
 }

@@ -1,4 +1,5 @@
-import { apiFetch } from './api'
+import dayjs from 'dayjs'
+import { apiFetch, getFamilyId } from './api'
 import { db } from '../db'
 import type { Entry, EntryCategory, PaymentMethod, RecurringRule, OutboxItem } from '../types'
 
@@ -40,6 +41,33 @@ const applyPaymentMethod = async (paymentMethod: PaymentMethod | null) => {
 const applyRecurringRule = async (recurringRule: RecurringRule | null) => {
   if (!recurringRule) return
   await db.recurringRules.put(recurringRule)
+}
+
+const buildMonthlyBalanceId = (familyId: string, ym: string) => `${familyId}:${ym}`
+
+const pullMonthlyBalances = async () => {
+  const familyId = getFamilyId()
+  const toYm = dayjs().format('YYYY-MM')
+  const fromYm = dayjs().subtract(12, 'month').format('YYYY-MM')
+  const response = await apiFetch(`/monthly-balances?from=${fromYm}&to=${toYm}`)
+  if (!response.ok) return
+  const data = (await response.json()) as {
+    monthly_balances?: { ym?: string; balance?: number; is_closed?: number; updated_at?: string }[]
+  }
+  const rows = data.monthly_balances ?? []
+  const records = rows
+    .filter((row) => typeof row.ym === 'string' && typeof row.balance === 'number')
+    .map((row) => ({
+      id: buildMonthlyBalanceId(familyId, row.ym as string),
+      family_id: familyId,
+      ym: row.ym as string,
+      balance: row.balance as number,
+      is_closed: row.is_closed ?? 0,
+      updated_at: row.updated_at ?? new Date().toISOString(),
+    }))
+  if (records.length) {
+    await db.monthlyBalances.bulkPut(records)
+  }
 }
 
 const syncItem = async (item: OutboxItem) => {
@@ -118,9 +146,11 @@ export const syncOutbox = async () => {
   try {
     await pullEntries()
     entriesSynced = true
-  } catch {}
+  } catch {
+    // keep last sync timestamp as-is when offline
+  }
 
-  await Promise.allSettled([pullEntryCategories(), pullPaymentMethods(), pullRecurringRules()])
+  await Promise.allSettled([pullEntryCategories(), pullPaymentMethods(), pullRecurringRules(), pullMonthlyBalances()])
 
   if (entriesSynced) {
     setLastSync(new Date().toISOString())

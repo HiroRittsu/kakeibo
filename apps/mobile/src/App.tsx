@@ -3,9 +3,9 @@ import dayjs from 'dayjs'
 import { useLiveQuery } from 'dexie-react-hooks'
 import './App.css'
 import { db } from './db'
-import { apiFetch, getFamilyId } from './lib/api'
+import { getFamilyId } from './lib/api'
 import { enqueueOutbox, syncOutbox } from './lib/sync'
-import type { Entry, EntryCategory, EntryType, PaymentMethod, RecurringRule } from './types'
+import type { Entry, EntryCategory, EntryType, MonthlyBalance, PaymentMethod, RecurringRule } from './types'
 
 type TabKey = 'home' | 'history' | 'reports'
 
@@ -52,6 +52,12 @@ type DayCell = {
 
 type HistoryItem = Entry & {
   is_planned?: boolean
+  is_carryover?: boolean
+}
+
+type CarryoverDay = {
+  entry_type: EntryType
+  amount: number
 }
 
 type ReportSummary = {
@@ -74,24 +80,103 @@ type ReportData = {
   categoryTotalsByType: Record<EntryType, CategoryTotal[]>
 }
 
-type ReportTotalRow = {
-  entry_type: EntryType
-  total: number
+const CARRYOVER_CATEGORY_ID = 'carryover'
+const buildMonthlyBalanceId = (familyId: string, ym: string) => `${familyId}:${ym}`
+
+const getYmFromDate = (value: string) => value.slice(0, 7)
+
+const ymToIndex = (ym: string) => {
+  const [yearRaw, monthRaw] = ym.split('-')
+  const year = Number(yearRaw)
+  const month = Number(monthRaw)
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return 0
+  return year * 12 + (month - 1)
 }
 
-type ReportCategoryRow = {
-  entry_category_id: string | null
-  entry_type: EntryType
-  total: number
+const formatYmFromIndex = (index: number) => {
+  const year = Math.floor(index / 12)
+  const month = (index % 12) + 1
+  return `${year}-${`${month}`.padStart(2, '0')}`
 }
 
-type ReportResponse = {
-  range: string
-  from: string
-  to: string
-  totals: ReportTotalRow[]
-  categories: ReportCategoryRow[]
+const addMonthsToYm = (ym: string, diff: number) => {
+  const nextIndex = ymToIndex(ym) + diff
+  return formatYmFromIndex(nextIndex)
 }
+
+const recalcLocalMonthlyBalances = async (entries: Entry[], familyId: string, startYm: string) => {
+  const currentYm = dayjs().format('YYYY-MM')
+  const startIndex = ymToIndex(startYm)
+  const endIndex = ymToIndex(currentYm)
+  if (startIndex > endIndex) return
+
+  const prevYm = addMonthsToYm(startYm, -1)
+  const prevRecord = await db.monthlyBalances.get(buildMonthlyBalanceId(familyId, prevYm))
+  let previousBalance =
+    typeof prevRecord?.balance === 'number'
+      ? prevRecord.balance
+      : entries.reduce((sum, entry) => {
+          const ym = getYmFromDate(getEntryDateKey(entry))
+          if (ymToIndex(ym) <= ymToIndex(prevYm)) {
+            return sum + (entry.entry_type === 'income' ? entry.amount : -entry.amount)
+          }
+          return sum
+        }, 0)
+
+  const monthTotals = new Map<string, { income: number; expense: number }>()
+  entries.forEach((entry) => {
+    const ym = getYmFromDate(getEntryDateKey(entry))
+    const index = ymToIndex(ym)
+    if (index < startIndex || index > endIndex) return
+    const current = monthTotals.get(ym) ?? { income: 0, expense: 0 }
+    if (entry.entry_type === 'income') {
+      current.income += entry.amount
+    } else {
+      current.expense += entry.amount
+    }
+    monthTotals.set(ym, current)
+  })
+
+  const months: string[] = []
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    months.push(formatYmFromIndex(index))
+  }
+
+  const existingBalances = months.length ? await db.monthlyBalances.where('ym').anyOf(months).toArray() : []
+  const isClosedMap = new Map(existingBalances.map((row) => [row.ym, row.is_closed ?? 0]))
+
+  const updatedAt = new Date().toISOString()
+  const records: MonthlyBalance[] = []
+  months.forEach((ym) => {
+    const totals = monthTotals.get(ym) ?? { income: 0, expense: 0 }
+    previousBalance += totals.income - totals.expense
+    records.push({
+      id: buildMonthlyBalanceId(familyId, ym),
+      family_id: familyId,
+      ym,
+      balance: Math.round(previousBalance),
+      is_closed: isClosedMap.get(ym) ?? 0,
+      updated_at: updatedAt,
+    })
+  })
+
+  if (records.length) {
+    await db.monthlyBalances.bulkPut(records)
+  }
+}
+
+const getReportCategoryMeta = (id: string, categories: EntryCategory[]) => {
+  if (id === CARRYOVER_CATEGORY_ID) {
+    return { name: '繰越し', icon_key: 'redo', color: '#8f9499' }
+  }
+  const category = categories.find((item) => item.id === id)
+  return {
+    name: category?.name ?? '未分類',
+    icon_key: category?.icon_key ?? null,
+    color: category?.color ?? null,
+  }
+}
+
 
 const TAB_LABELS: Record<TabKey, string> = {
   home: '入力',
@@ -477,25 +562,25 @@ const computeReport = (
   const categoryTotalsByType: Record<EntryType, CategoryTotal[]> = {
     income: Array.from(categoryMaps.income.entries())
       .map(([id, total]) => {
-        const category = categories.find((item) => item.id === id)
+        const category = getReportCategoryMeta(id, categories)
         return {
           id,
           total,
-          name: category?.name ?? '未分類',
-          icon_key: category?.icon_key ?? null,
-          color: category?.color ?? null,
+          name: category.name,
+          icon_key: category.icon_key,
+          color: category.color,
         }
       })
       .sort((a, b) => b.total - a.total),
     expense: Array.from(categoryMaps.expense.entries())
       .map(([id, total]) => {
-        const category = categories.find((item) => item.id === id)
+        const category = getReportCategoryMeta(id, categories)
         return {
           id,
           total,
-          name: category?.name ?? '未分類',
-          icon_key: category?.icon_key ?? null,
-          color: category?.color ?? null,
+          name: category.name,
+          icon_key: category.icon_key,
+          color: category.color,
         }
       })
       .sort((a, b) => b.total - a.total),
@@ -538,87 +623,6 @@ const buildReportSeries = (
     label: point.label,
     total: totals.get(point.key) ?? 0,
   }))
-}
-
-const buildReportFromApi = (data: ReportResponse, categories: EntryCategory[]): ReportData => {
-  const summary: ReportSummary = { income: 0, expense: 0 }
-
-  data.totals?.forEach((row) => {
-    const total = Number(row.total) || 0
-    if (row.entry_type === 'income') summary.income += total
-    if (row.entry_type === 'expense') summary.expense += total
-  })
-
-  const byCategory: Record<EntryType, Map<string, number>> = {
-    income: new Map<string, number>(),
-    expense: new Map<string, number>(),
-  }
-
-  data.categories?.forEach((row) => {
-    const key = row.entry_category_id ?? 'uncategorized'
-    const map = byCategory[row.entry_type]
-    map.set(key, (map.get(key) ?? 0) + (Number(row.total) || 0))
-  })
-
-  const categoryTotalsByType: Record<EntryType, CategoryTotal[]> = {
-    income: Array.from(byCategory.income.entries())
-      .map(([id, total]) => {
-        const category = categories.find((item) => item.id === id)
-        return {
-          id,
-          total,
-          name: category?.name ?? '未分類',
-          icon_key: category?.icon_key ?? null,
-          color: category?.color ?? null,
-        }
-      })
-      .sort((a, b) => b.total - a.total),
-    expense: Array.from(byCategory.expense.entries())
-      .map(([id, total]) => {
-        const category = categories.find((item) => item.id === id)
-        return {
-          id,
-          total,
-          name: category?.name ?? '未分類',
-          icon_key: category?.icon_key ?? null,
-          color: category?.color ?? null,
-        }
-      })
-      .sort((a, b) => b.total - a.total),
-  }
-
-  return { summary, categoryTotalsByType }
-}
-
-const mergeReportData = (base: ReportData, extra: ReportData): ReportData => {
-  const summary: ReportSummary = {
-    income: base.summary.income + extra.summary.income,
-    expense: base.summary.expense + extra.summary.expense,
-  }
-
-  const mergeByType = (type: EntryType) => {
-    const map = new Map<string, CategoryTotal>()
-    base.categoryTotalsByType[type].forEach((item) => {
-      map.set(item.id, { ...item })
-    })
-    extra.categoryTotalsByType[type].forEach((item) => {
-      const current = map.get(item.id)
-      if (current) {
-        current.total += item.total
-      } else {
-        map.set(item.id, { ...item })
-      }
-    })
-    return Array.from(map.values()).sort((a, b) => b.total - a.total)
-  }
-
-  return {
-    summary,
-    categoryTotalsByType: {
-      income: mergeByType('income'),
-      expense: mergeByType('expense'),
-    },
-  }
 }
 
 const estimateMonthlyAmount = (rule: RecurringRule) => {
@@ -695,6 +699,7 @@ function App() {
   const entryCategories = useLiveQuery(() => db.entryCategories.orderBy('sort_order').toArray(), [])
   const paymentMethods = useLiveQuery(() => db.paymentMethods.orderBy('sort_order').toArray(), [])
   const recurringRules = useLiveQuery(() => db.recurringRules.orderBy('created_at').reverse().toArray(), [])
+  const monthlyBalances = useLiveQuery(() => db.monthlyBalances.orderBy('ym').toArray(), [])
   const outboxCount = useLiveQuery(() => db.outbox.count(), [])
 
   const paymentOptions = useMemo<SelectOption[]>(() => {
@@ -711,6 +716,10 @@ function App() {
   const paymentMap = useMemo(() => {
     return new Map((paymentMethods ?? []).map((method) => [method.id, method]))
   }, [paymentMethods])
+
+  const monthlyBalanceMap = useMemo(() => {
+    return new Map((monthlyBalances ?? []).map((row) => [row.ym, row]))
+  }, [monthlyBalances])
 
   useEffect(() => {
     void syncOutbox()
@@ -745,6 +754,8 @@ function App() {
     }
 
     await db.entries.put(entry)
+    const entriesSnapshot = await db.entries.toArray()
+    await recalcLocalMonthlyBalances(entriesSnapshot, entry.family_id, getYmFromDate(occurredOn))
     setPreferredEntryType(payload.entryType)
 
     if (existing) {
@@ -769,7 +780,16 @@ function App() {
   }
 
   const handleDeleteEntry = async (entryId: string) => {
+    const existing = (entries ?? []).find((entry) => entry.id === entryId) ?? (await db.entries.get(entryId))
     await db.entries.delete(entryId)
+    if (existing) {
+      const entriesSnapshot = await db.entries.toArray()
+      await recalcLocalMonthlyBalances(
+        entriesSnapshot,
+        existing.family_id,
+        getYmFromDate(getEntryDateKey(existing))
+      )
+    }
     await enqueueOutbox({
       id: crypto.randomUUID(),
       method: 'DELETE',
@@ -1067,6 +1087,7 @@ function App() {
             entries={entries ?? []}
             categories={entryCategories ?? []}
             paymentMethods={paymentOptions}
+            monthlyBalanceMap={monthlyBalanceMap}
             entryType={preferredEntryType}
             onEntryTypeChange={setPreferredEntryType}
             onOpenCategorySettings={() => handleOpenPage('category-settings')}
@@ -1078,6 +1099,7 @@ function App() {
             entries={entries ?? []}
             categoryMap={categoryMap}
             paymentMap={paymentMap}
+            monthlyBalanceMap={monthlyBalanceMap}
             recurringRules={recurringRules ?? []}
             defaultEntryType={preferredEntryType}
             defaultPaymentMethodId={paymentMethods?.[0]?.id ?? null}
@@ -1105,17 +1127,20 @@ function App() {
           <ReportsTab
             entries={entries ?? []}
             categories={entryCategories ?? []}
+            monthlyBalanceMap={monthlyBalanceMap}
           />
         )}
         {page === 'balance' && (
           <BalancePage
             entries={entries ?? []}
+            monthlyBalanceMap={monthlyBalanceMap}
             paymentMethods={paymentMethods ?? []}
             onOpenPayment={handleOpenPayment}
           />
         )}
         {page === 'entry-input' && entrySeed && (
           <EntryInputPage
+            key={`${entrySeed.id ?? 'new'}-${entrySeed.occurredAt}`}
             seed={entrySeed}
             categories={entryCategories ?? []}
             paymentMethods={paymentMethods ?? []}
@@ -1201,6 +1226,7 @@ type HomeTabProps = {
   entries: Entry[]
   categories: EntryCategory[]
   paymentMethods: SelectOption[]
+  monthlyBalanceMap: Map<string, MonthlyBalance>
   entryType: EntryType
   onEntryTypeChange: (entryType: EntryType) => void
   onOpenCategorySettings: () => void
@@ -1211,11 +1237,15 @@ const HomeTab = ({
   entries,
   categories,
   paymentMethods,
+  monthlyBalanceMap,
   entryType,
   onEntryTypeChange,
   onOpenCategorySettings,
   onOpenEntryInput,
 }: HomeTabProps) => {
+  const currentMonthKey = dayjs().format('YYYY-MM')
+  const balanceYm = dayjs(currentMonthKey).subtract(1, 'month').format('YYYY-MM')
+  const carryoverBalance = monthlyBalanceMap.get(balanceYm)?.balance ?? null
 
   const visibleCategories = useMemo(() => {
     return categories.filter((category) => category.type === entryType)
@@ -1239,8 +1269,9 @@ const HomeTab = ({
       }
     })
 
-    return { income, expense, balance: income - expense }
-  }, [entries])
+    const carryover = carryoverBalance ?? 0
+    return { income, expense, balance: carryover + income - expense }
+  }, [entries, carryoverBalance])
 
   const totalForRatio = monthSummary.income + monthSummary.expense
   const ratio = totalForRatio > 0 ? monthSummary.expense / totalForRatio : 0
@@ -1340,52 +1371,28 @@ const EntryInputPage = ({
   onDelete,
   onEntryTypeChange,
 }: EntryInputPageProps) => {
+  const initialMemo = splitMemo(seed.memo)
   const [entryType, setEntryType] = useState<EntryType>(seed.entryType)
   const [entryCategoryId, setEntryCategoryId] = useState(seed.entryCategoryId ?? '')
   const [paymentMethodId, setPaymentMethodId] = useState(seed.paymentMethodId ?? '')
-  const [place, setPlace] = useState('')
-  const [memo, setMemo] = useState('')
+  const [place, setPlace] = useState(initialMemo.place)
+  const [memo, setMemo] = useState(initialMemo.memo)
   const [dateValue, setDateValue] = useState(dayjs(seed.occurredAt).format('YYYY-MM-DD'))
   const [timeValue, setTimeValue] = useState(dayjs(seed.occurredAt).format('HH:mm'))
   const [displayValue, setDisplayValue] = useState(seed.amount ? String(seed.amount) : '0')
   const [accumulator, setAccumulator] = useState<number | null>(null)
   const [pendingOperator, setPendingOperator] = useState<CalcOperator | null>(null)
-  const [freshInput, setFreshInput] = useState(true)
+  const [freshInput, setFreshInput] = useState(!seed.amount)
   const [operationUsed, setOperationUsed] = useState(false)
   const [awaitingSubmit, setAwaitingSubmit] = useState(false)
-
-  useEffect(() => {
-    setEntryType(seed.entryType)
-    setEntryCategoryId(seed.entryCategoryId ?? '')
-    setPaymentMethodId(seed.paymentMethodId ?? '')
-    const { place: seedPlace, memo: seedMemo } = splitMemo(seed.memo)
-    setPlace(seedPlace)
-    setMemo(seedMemo)
-    setDateValue(dayjs(seed.occurredAt).format('YYYY-MM-DD'))
-    setTimeValue(dayjs(seed.occurredAt).format('HH:mm'))
-    setDisplayValue(seed.amount ? String(seed.amount) : '0')
-    setAccumulator(null)
-    setPendingOperator(null)
-    setFreshInput(!seed.amount)
-    setOperationUsed(false)
-    setAwaitingSubmit(false)
-  }, [seed])
 
   const visibleCategories = useMemo(() => {
     return categories.filter((category) => category.type === entryType)
   }, [categories, entryType])
-
-  useEffect(() => {
-    if (!visibleCategories.length) {
-      if (entryCategoryId) setEntryCategoryId('')
-      return
-    }
-    if (!entryCategoryId || !visibleCategories.some((category) => category.id === entryCategoryId)) {
-      setEntryCategoryId(visibleCategories[0].id)
-    }
-  }, [entryCategoryId, visibleCategories])
-
-  const selectedCategory = visibleCategories.find((category) => category.id === entryCategoryId)
+  const resolvedEntryCategoryId = visibleCategories.some((category) => category.id === entryCategoryId)
+    ? entryCategoryId
+    : ''
+  const selectedCategory = visibleCategories.find((category) => category.id === resolvedEntryCategoryId)
   const isEditing = Boolean(seed.id)
 
   const dateTime = useMemo(() => {
@@ -1483,7 +1490,7 @@ const EntryInputPage = ({
       id: seed.id,
       entryType,
       amount: Math.round(result),
-      entryCategoryId: entryCategoryId || null,
+      entryCategoryId: resolvedEntryCategoryId || null,
       paymentMethodId: paymentMethodId || null,
       memo: payloadMemo,
       occurredAt: dateTime.toISOString(),
@@ -1539,7 +1546,7 @@ const EntryInputPage = ({
           {selectedCategory ? getCategoryIcon(selectedCategory.icon_key) ?? selectedCategory.name.slice(0, 1) : '?'}
         </span>
         <div className="entry-row-controls">
-          <select value={entryCategoryId} onChange={(event) => setEntryCategoryId(event.target.value)}>
+          <select value={resolvedEntryCategoryId} onChange={(event) => setEntryCategoryId(event.target.value)}>
             <option value="">カテゴリ</option>
             {visibleCategories.map((category) => (
               <option key={category.id} value={category.id}>
@@ -1657,6 +1664,7 @@ type HistoryTabProps = {
   entries: Entry[]
   categoryMap: Map<string, EntryCategory>
   paymentMap: Map<string, PaymentMethod>
+  monthlyBalanceMap: Map<string, MonthlyBalance>
   recurringRules: RecurringRule[]
   onEdit: (entry: Entry) => void
   onOpenEntryInput: (seed: EntryInputSeed, tab?: TabKey) => void
@@ -1668,6 +1676,7 @@ const HistoryTab = ({
   entries,
   categoryMap,
   paymentMap,
+  monthlyBalanceMap,
   recurringRules,
   onEdit,
   onOpenEntryInput,
@@ -1678,6 +1687,10 @@ const HistoryTab = ({
   const [currentMonth, setCurrentMonth] = useState(dayjs())
   const [selectedDate, setSelectedDate] = useState(() => dayjs().format('YYYY-MM-DD'))
   const weekdayLabels = ['日', '月', '火', '水', '木', '金', '土']
+  const displayYm = currentMonth.format('YYYY-MM')
+  const balanceYm = currentMonth.subtract(1, 'month').format('YYYY-MM')
+  const carryoverBalance = monthlyBalanceMap.get(balanceYm)?.balance ?? null
+
 
   const monthEntries = useMemo(() => {
     return entries.filter((entry) => dayjs(getEntryDateKey(entry)).isSame(currentMonth, 'month'))
@@ -1714,10 +1727,34 @@ const HistoryTab = ({
       }))
   }, [recurringRules, currentMonth, entries])
 
-  useEffect(() => {
-    const base = dayjs().isSame(currentMonth, 'month') ? dayjs() : currentMonth.startOf('month')
+  const carryoverEntry = useMemo<HistoryItem | null>(() => {
+    if (carryoverBalance === null) return null
+    const date = `${displayYm}-01`
+    const baseDate = dayjs(date).startOf('day').toISOString()
+    const entryType: EntryType = carryoverBalance >= 0 ? 'income' : 'expense'
+    return {
+      id: `carryover-${displayYm}`,
+      family_id: getFamilyId(),
+      entry_type: entryType,
+      amount: Math.abs(carryoverBalance),
+      entry_category_id: null,
+      payment_method_id: null,
+      memo: '繰越し',
+      occurred_at: baseDate,
+      occurred_on: date,
+      recurring_rule_id: null,
+      created_at: baseDate,
+      updated_at: baseDate,
+      is_carryover: true,
+    }
+  }, [carryoverBalance, displayYm])
+
+  const handleChangeMonth = (delta: number) => {
+    const next = currentMonth.add(delta, 'month')
+    setCurrentMonth(next)
+    const base = dayjs().isSame(next, 'month') ? dayjs() : next.startOf('month')
     setSelectedDate(base.format('YYYY-MM-DD'))
-  }, [currentMonth])
+  }
 
   const monthTotals = useMemo(() => {
     const byDay = new Map<string, DayTotals>()
@@ -1748,7 +1785,13 @@ const HistoryTab = ({
   const groupedEntries = useMemo(() => {
     const map = new Map<
       string,
-      { date: dayjs.Dayjs; entries: HistoryItem[]; planned: HistoryItem[]; totals: { income: number; expense: number } }
+      {
+        date: dayjs.Dayjs
+        entries: HistoryItem[]
+        planned: HistoryItem[]
+        carryover: HistoryItem[]
+        totals: { income: number; expense: number }
+      }
     >()
     monthEntries.forEach((entry) => {
       const key = getEntryDateKey(entry)
@@ -1756,6 +1799,7 @@ const HistoryTab = ({
         date: dayjs(getEntryDateKey(entry)),
         entries: [],
         planned: [],
+        carryover: [],
         totals: { income: 0, expense: 0 },
       }
       current.entries.push(entry)
@@ -1772,11 +1816,29 @@ const HistoryTab = ({
         date: dayjs(getEntryDateKey(entry)),
         entries: [],
         planned: [],
+        carryover: [],
         totals: { income: 0, expense: 0 },
       }
       current.planned.push(entry)
       map.set(key, current)
     })
+    if (carryoverEntry) {
+      const key = getEntryDateKey(carryoverEntry)
+      const current = map.get(key) ?? {
+        date: dayjs(getEntryDateKey(carryoverEntry)),
+        entries: [],
+        planned: [],
+        carryover: [],
+        totals: { income: 0, expense: 0 },
+      }
+      current.carryover.push(carryoverEntry)
+      if (carryoverEntry.entry_type === 'income') {
+        current.totals.income += carryoverEntry.amount
+      } else {
+        current.totals.expense += carryoverEntry.amount
+      }
+      map.set(key, current)
+    }
     return Array.from(map.values())
       .map((group) => ({
         ...group,
@@ -1788,19 +1850,20 @@ const HistoryTab = ({
         ),
       }))
       .sort((a, b) => b.date.valueOf() - a.date.valueOf())
-  }, [monthEntries, plannedItems])
+  }, [monthEntries, plannedItems, carryoverEntry])
 
-  const selectedEntries = useMemo(() => {
-    const actual = monthEntries.filter(
-      (entry) => getEntryDateKey(entry) === selectedDate
-    )
+  const selectedEntries = useMemo<HistoryItem[]>(() => {
+    const actual = monthEntries
+      .filter((entry) => getEntryDateKey(entry) === selectedDate)
+      .map((entry) => ({ ...entry, is_planned: false }))
     const planned = plannedItems.filter(
       (entry) => getEntryDateKey(entry) === selectedDate
     )
-    return [...actual, ...planned].sort(
+    const carryover = carryoverEntry && getEntryDateKey(carryoverEntry) === selectedDate ? [carryoverEntry] : []
+    return [...carryover, ...actual, ...planned].sort(
       (a, b) => dayjs(a.occurred_at).valueOf() - dayjs(b.occurred_at).valueOf()
     )
-  }, [monthEntries, plannedItems, selectedDate])
+  }, [monthEntries, plannedItems, carryoverEntry, selectedDate])
 
   const plannedTotals = useMemo(() => {
     const map = new Map<string, DayTotals>()
@@ -1817,14 +1880,15 @@ const HistoryTab = ({
     return map
   }, [plannedItems])
 
-  const recurringDays = useMemo(() => {
-    const set = new Set<string>()
-    monthEntries.forEach((entry) => {
-      if (!entry.recurring_rule_id) return
-      set.add(getEntryDateKey(entry))
+  const carryoverTotals = useMemo(() => {
+    const map = new Map<string, CarryoverDay>()
+    if (!carryoverEntry) return map
+    map.set(getEntryDateKey(carryoverEntry), {
+      entry_type: carryoverEntry.entry_type,
+      amount: carryoverEntry.amount,
     })
-    return set
-  }, [monthEntries])
+    return map
+  }, [carryoverEntry])
 
   const selectedTotals = useMemo(() => {
     return selectedEntries.reduce(
@@ -1842,13 +1906,15 @@ const HistoryTab = ({
   }, [selectedEntries])
 
   const renderEntryButton = (entry: HistoryItem) => {
-    const category = entry.entry_category_id ? categoryMap.get(entry.entry_category_id) : null
-    const method = entry.payment_method_id ? paymentMap.get(entry.payment_method_id) : null
-    const memoValue = entry.memo?.trim()
-    const paymentClass = method?.type ?? 'unknown'
-    const categoryColor = category?.color ?? '#d9554c'
-    const categoryIcon = getCategoryIcon(category?.icon_key)
+    const isCarryover = Boolean(entry.is_carryover)
+    const category = !isCarryover && entry.entry_category_id ? categoryMap.get(entry.entry_category_id) : null
+    const method = !isCarryover && entry.payment_method_id ? paymentMap.get(entry.payment_method_id) : null
+    const memoValue = !isCarryover ? entry.memo?.trim() : null
+    const paymentClass = method?.type === 'card' ? 'credit-card' : method?.type ?? 'unknown'
+    const categoryColor = isCarryover ? '#8f9499' : category?.color ?? '#d9554c'
+    const categoryIcon = isCarryover ? renderMaterialIcon('redo') : getCategoryIcon(category?.icon_key)
     const categoryFallback = category?.name?.slice(0, 1) ?? '?'
+    const categoryLabel = isCarryover ? '繰越し' : category?.name ?? '未分類'
     const isPlanned = Boolean(entry.is_planned)
     const isRecurring = Boolean(entry.recurring_rule_id)
     const amountPrefix = isPlanned ? (entry.entry_type === 'income' ? '+' : '-') : ''
@@ -1857,22 +1923,25 @@ const HistoryTab = ({
       <button
         key={entry.id}
         type="button"
-        className={`entry-button ${isPlanned ? 'planned' : ''}`}
-        onClick={isPlanned ? undefined : () => onEdit(entry)}
-        disabled={isPlanned}
+        className={`entry-button ${isPlanned ? 'planned' : ''} ${isCarryover ? 'carryover' : ''}`}
+        onClick={isPlanned || isCarryover ? undefined : () => onEdit(entry)}
+        disabled={isPlanned || isCarryover}
       >
         <div className="entry-row-main">
           <span className="entry-category-icon" style={{ background: categoryColor }}>
             {categoryIcon ?? <span className="category-fallback">{categoryFallback}</span>}
-            <span className={`entry-payment-overlay ${paymentClass}`}>{getPaymentIcon(method)}</span>
+            {!isCarryover && (
+              <span className={`entry-payment-overlay ${paymentClass}`}>{getPaymentIcon(method)}</span>
+            )}
           </span>
           <div className="entry-info">
             <div className="entry-top-row">
-              <strong className="entry-name">{category?.name ?? '未分類'}</strong>
+              <strong className="entry-name">{categoryLabel}</strong>
               {memoValue && <span className="entry-memo">{memoValue}</span>}
               <div className="entry-badges">
                 <span className={`badge ${entry.entry_type}`}>{entry.entry_type === 'income' ? '収入' : '支出'}</span>
-                {isRecurring && <span className="badge recurring">定期</span>}
+                {isCarryover && <span className="badge carryover">繰越し</span>}
+                {isRecurring && !isCarryover && <span className="badge recurring">定期</span>}
                 {isPlanned && <span className="badge planned">予定</span>}
               </div>
             </div>
@@ -1907,11 +1976,11 @@ const HistoryTab = ({
   return (
     <section className="card">
       <div className="month-header">
-        <button className="icon-button" onClick={() => setCurrentMonth((prev) => prev.subtract(1, 'month'))}>
+        <button className="icon-button" onClick={() => handleChangeMonth(-1)}>
           ‹
         </button>
         <h2>{currentMonth.format('YYYY年 M月')}</h2>
-        <button className="icon-button" onClick={() => setCurrentMonth((prev) => prev.add(1, 'month'))}>
+        <button className="icon-button" onClick={() => handleChangeMonth(1)}>
           ›
         </button>
       </div>
@@ -1950,6 +2019,7 @@ const HistoryTab = ({
               </div>
               <div className="entry-group-card">
                 <div className="entry-group-list">
+                  {group.carryover.map((entry) => renderEntryButton(entry))}
                   {group.entries.map((entry) => renderEntryButton(entry))}
                   {group.planned.map((entry) => renderEntryButton(entry))}
                 </div>
@@ -1973,7 +2043,7 @@ const HistoryTab = ({
               const cellKey = cell.date.format('YYYY-MM-DD')
               const isSelected = cellKey === selectedDate
               const planned = plannedTotals.get(cellKey) ?? { income: 0, expense: 0 }
-              const hasRecurring = recurringDays.has(cellKey)
+              const carryover = carryoverTotals.get(cellKey)
               return (
                 <button
                   key={cell.date.toISOString()}
@@ -1998,6 +2068,11 @@ const HistoryTab = ({
                   )}
                   {planned.income > 0 && (
                     <span className="calendar-amount income planned">+{formatAmount(planned.income)}</span>
+                  )}
+                  {carryover && (
+                    <span className={`calendar-amount carryover ${carryover.entry_type}`}>
+                      {formatAmount(carryover.amount)}
+                    </span>
                   )}
                 </button>
               )
@@ -2031,28 +2106,63 @@ const HistoryTab = ({
 type ReportsTabProps = {
   entries: Entry[]
   categories: EntryCategory[]
+  monthlyBalanceMap: Map<string, MonthlyBalance>
 }
 
-const ReportsTab = ({ entries, categories }: ReportsTabProps) => {
+const ReportsTab = ({ entries, categories, monthlyBalanceMap }: ReportsTabProps) => {
   const [range, setRange] = useState<'week' | 'month' | 'year'>('month')
   const [reportType, setReportType] = useState<EntryType>('expense')
   const [chartType, setChartType] = useState<'donut' | 'bar'>('donut')
   const [reportOffset, setReportOffset] = useState(0)
   const barScrollRef = useRef<HTMLDivElement | null>(null)
 
-  useEffect(() => {
-    setReportOffset(0)
-  }, [range])
-
   const rangeUnit = range === 'week' ? 'week' : range === 'year' ? 'year' : 'month'
   const baseDate = useMemo(() => dayjs().add(reportOffset, rangeUnit), [reportOffset, rangeUnit])
+  const handleRangeChange = (nextRange: 'week' | 'month' | 'year') => {
+    setRange(nextRange)
+    setReportOffset(0)
+  }
 
-  const reportEntries = useMemo<ReportEntry[]>(() => entries, [entries])
-  const localReport = useMemo(
+  const rangeMonths = useMemo(() => {
+    const { start, end } = getRangeBounds(range, baseDate)
+    const startMonth = start.startOf('month')
+    const endMonth = end.startOf('month')
+    const months: dayjs.Dayjs[] = []
+    for (
+      let cursor = startMonth;
+      cursor.isBefore(endMonth) || cursor.isSame(endMonth, 'month');
+      cursor = cursor.add(1, 'month')
+    ) {
+      months.push(cursor)
+    }
+    return months
+  }, [range, baseDate])
+
+  const carryoverEntries = useMemo<ReportEntry[]>(() => {
+    return rangeMonths
+      .map<ReportEntry | null>((month) => {
+        const balanceYm = month.subtract(1, 'month').format('YYYY-MM')
+        const balance = monthlyBalanceMap.get(balanceYm)?.balance
+        if (typeof balance !== 'number' || balance === 0) return null
+        const entryType: EntryType = balance >= 0 ? 'income' : 'expense'
+        const amount = Math.abs(balance)
+        const occurredAt = `${month.format('YYYY-MM-01')}T00:00:00+09:00`
+        return {
+          entry_type: entryType,
+          amount,
+          entry_category_id: CARRYOVER_CATEGORY_ID,
+          occurred_at: occurredAt,
+        }
+      })
+      .filter((item): item is ReportEntry => item !== null)
+  }, [monthlyBalanceMap, rangeMonths])
+
+  const reportEntries = useMemo<ReportEntry[]>(() => [...entries, ...carryoverEntries], [entries, carryoverEntries])
+  const localReport = useMemo<ReportData>(
     () => computeReport(reportEntries, categories, range, baseDate),
     [reportEntries, categories, range, baseDate]
   )
-  const [report, setReport] = useState<ReportData>(localReport)
+  const report = localReport
 
   const rangeInfo = useMemo(() => {
     const { start, end } = getRangeBounds(range, baseDate)
@@ -2067,31 +2177,6 @@ const ReportsTab = ({ entries, categories }: ReportsTabProps) => {
     const apiTo = end.add(1, 'day').format('YYYY-MM-DD')
     return { label, detail, apiFrom, apiTo }
   }, [range, baseDate])
-
-  useEffect(() => {
-    setReport(localReport)
-  }, [localReport])
-
-  useEffect(() => {
-    let active = true
-
-    const load = async () => {
-      try {
-        const response = await apiFetch(`/reports?range=${range}&from=${rangeInfo.apiFrom}&to=${rangeInfo.apiTo}`)
-        if (!response.ok) return
-        const data = (await response.json()) as ReportResponse
-        if (!active) return
-        setReport(buildReportFromApi(data, categories))
-      } catch {
-        // fallback to local report
-      }
-    }
-
-    void load()
-    return () => {
-      active = false
-    }
-  }, [range, categories, rangeInfo])
 
   const activeTotal = report.summary[reportType]
   const categoryTotals = report.categoryTotalsByType[reportType]
@@ -2141,13 +2226,13 @@ const ReportsTab = ({ entries, categories }: ReportsTabProps) => {
       </div>
       <div className="report-range">{rangeInfo.detail}</div>
       <div className="pill-toggle small">
-        <button className={range === 'week' ? 'active' : ''} onClick={() => setRange('week')}>
+        <button className={range === 'week' ? 'active' : ''} onClick={() => handleRangeChange('week')}>
           週
         </button>
-        <button className={range === 'month' ? 'active' : ''} onClick={() => setRange('month')}>
+        <button className={range === 'month' ? 'active' : ''} onClick={() => handleRangeChange('month')}>
           月
         </button>
-        <button className={range === 'year' ? 'active' : ''} onClick={() => setRange('year')}>
+        <button className={range === 'year' ? 'active' : ''} onClick={() => handleRangeChange('year')}>
           年
         </button>
       </div>
@@ -2249,6 +2334,7 @@ const ReportsTab = ({ entries, categories }: ReportsTabProps) => {
 
 type BalancePageProps = {
   entries: Entry[]
+  monthlyBalanceMap: Map<string, MonthlyBalance>
   paymentMethods: PaymentMethod[]
   onOpenPayment: (type: PaymentType) => void
 }
@@ -2258,7 +2344,24 @@ const normalizeMethodType = (type: string) => {
   return 'cash'
 }
 
-const BalancePage = ({ entries, paymentMethods, onOpenPayment }: BalancePageProps) => {
+const BalancePage = ({ entries, monthlyBalanceMap, paymentMethods, onOpenPayment }: BalancePageProps) => {
+  const currentMonthKey = dayjs().format('YYYY-MM')
+  const balanceYm = dayjs(currentMonthKey).subtract(1, 'month').format('YYYY-MM')
+  const carryoverBalance = monthlyBalanceMap.get(balanceYm)?.balance ?? null
+
+  const monthNet = useMemo(() => {
+    const current = dayjs()
+    const start = current.startOf('month')
+    const end = current.endOf('month')
+    let net = 0
+    entries.forEach((entry) => {
+      const date = dayjs(entry.occurred_at)
+      if (date.isBefore(start) || date.isAfter(end)) return
+      net += entry.entry_type === 'income' ? entry.amount : -entry.amount
+    })
+    return net
+  }, [entries])
+
   const totalsByMethod = useMemo(() => {
     const map = new Map<string, { income: number; expense: number }>()
     entries.forEach((entry) => {
@@ -2275,10 +2378,13 @@ const BalancePage = ({ entries, paymentMethods, onOpenPayment }: BalancePageProp
   }, [entries])
 
   const totalBalance = useMemo(() => {
+    if (carryoverBalance !== null) {
+      return carryoverBalance + monthNet
+    }
     return entries.reduce((sum, entry) => {
       return sum + (entry.entry_type === 'income' ? entry.amount : -entry.amount)
     }, 0)
-  }, [entries])
+  }, [entries, carryoverBalance, monthNet])
 
   const totalIncome = useMemo(() => {
     return entries.reduce((sum, entry) => (entry.entry_type === 'income' ? sum + entry.amount : sum), 0)
@@ -2690,19 +2796,30 @@ const RecurringSettingsPage = ({ rules, categories, paymentMethods, onAdd, onSav
     setShowForm(true)
   }
 
-  useEffect(() => {
-    if (frequency === 'weekly') {
-      const value = Number(dayOfMonth)
-      if (!Number.isFinite(value) || value < 0 || value > 6) {
-        setDayOfMonth(String(dayjs().day()))
+  const normalizeDayOfMonth = (value: string, nextFrequency: string) => {
+    if (nextFrequency === 'weekly') {
+      const numeric = Number(value)
+      if (!Number.isFinite(numeric) || numeric < 0 || numeric > 6) {
+        return String(dayjs().day())
       }
-      return
+      return String(Math.trunc(numeric))
     }
-    const value = Number(dayOfMonth)
-    if (!Number.isFinite(value) || value < 1 || value > 31) {
-      setDayOfMonth('1')
+    const numeric = Number(value)
+    if (!Number.isFinite(numeric) || numeric < 1 || numeric > 31) {
+      return '1'
     }
-  }, [frequency, dayOfMonth])
+    return String(Math.trunc(numeric))
+  }
+
+  const handleFrequencyChange = (value: string) => {
+    const nextFrequency = value || 'monthly'
+    setFrequency(nextFrequency)
+    setDayOfMonth(normalizeDayOfMonth(dayOfMonth, nextFrequency))
+  }
+
+  const handleDayOfMonthChange = (value: string) => {
+    setDayOfMonth(normalizeDayOfMonth(value, frequency))
+  }
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()
@@ -2858,7 +2975,7 @@ const RecurringSettingsPage = ({ rules, categories, paymentMethods, onAdd, onSav
               onChange={(event) => setMemo(event.target.value)}
             />
             <div className={`row ${frequency === 'yearly' ? 'row-3' : ''}`}>
-              <select value={frequency} onChange={(event) => setFrequency(event.target.value)}>
+              <select value={frequency} onChange={(event) => handleFrequencyChange(event.target.value)}>
                 <option value="" disabled>
                   頻度
                 </option>
@@ -2868,7 +2985,7 @@ const RecurringSettingsPage = ({ rules, categories, paymentMethods, onAdd, onSav
                 <option value="yearly">年次</option>
               </select>
               {frequency === 'weekly' ? (
-                <select value={dayOfMonth} onChange={(event) => setDayOfMonth(event.target.value)}>
+                <select value={dayOfMonth} onChange={(event) => handleDayOfMonthChange(event.target.value)}>
                   <option value="" disabled>
                     曜日
                   </option>
@@ -2895,7 +3012,7 @@ const RecurringSettingsPage = ({ rules, categories, paymentMethods, onAdd, onSav
                   min={1}
                   max={31}
                   value={dayOfMonth}
-                  onChange={(event) => setDayOfMonth(event.target.value)}
+                  onChange={(event) => handleDayOfMonthChange(event.target.value)}
                   placeholder="日"
                 />
               )}
@@ -2905,7 +3022,7 @@ const RecurringSettingsPage = ({ rules, categories, paymentMethods, onAdd, onSav
                   min={1}
                   max={31}
                   value={dayOfMonth}
-                  onChange={(event) => setDayOfMonth(event.target.value)}
+                  onChange={(event) => handleDayOfMonthChange(event.target.value)}
                   placeholder="日"
                 />
               )}

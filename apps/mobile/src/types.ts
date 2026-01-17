@@ -57,6 +57,15 @@ export type RecurringRule = {
   updated_at: string
 }
 
+export type MonthlyBalance = {
+  id: string
+  family_id: string
+  ym: string
+  balance: number
+  is_closed: number
+  updated_at: string
+}
+
 export type OutboxItem = {
   id: string
   method: 'POST' | 'PATCH' | 'DELETE'
