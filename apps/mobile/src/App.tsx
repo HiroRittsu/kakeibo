@@ -58,6 +58,8 @@ type CategoryTotal = {
   id: string
   name: string
   total: number
+  icon_key?: string | null
+  color?: string | null
 }
 
 type ReportData = {
@@ -208,51 +210,6 @@ const IconSettings = () => (
   </IconBase>
 )
 
-const IconFood = () => (
-  <IconBase>
-    <path d="M6 3v7M9 3v7M12 3v7M6 10h6" />
-    <path d="M16 3v18" />
-  </IconBase>
-)
-
-const IconBroom = () => (
-  <IconBase>
-    <path d="M4 20l6-6" />
-    <path d="M10 14l7-7" />
-    <path d="M13 4l7 7" />
-  </IconBase>
-)
-
-const IconShirt = () => (
-  <IconBase>
-    <path d="M6 6l3-3 3 3 3-3 3 3-2 4v9H8V10L6 6z" />
-  </IconBase>
-)
-
-const IconRacket = () => (
-  <IconBase>
-    <circle cx="9" cy="9" r="5" />
-    <path d="M12.5 12.5l6 6" />
-  </IconBase>
-)
-
-const IconTrain = () => (
-  <IconBase>
-    <rect x="5" y="3" width="14" height="14" rx="2" />
-    <path d="M7 13h10" />
-    <path d="M8 17l-3 3M16 17l3 3" />
-    <circle cx="9" cy="9" r="1" />
-    <circle cx="15" cy="9" r="1" />
-  </IconBase>
-)
-
-const IconBook = () => (
-  <IconBase>
-    <path d="M4 4h7v16H4z" />
-    <path d="M13 4h7v16h-7z" />
-  </IconBase>
-)
-
 const IconCoins = () => (
   <IconBase>
     <ellipse cx="12" cy="6" rx="6" ry="2" />
@@ -261,50 +218,10 @@ const IconCoins = () => (
   </IconBase>
 )
 
-const IconCross = () => (
-  <IconBase>
-    <path d="M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z" />
-  </IconBase>
-)
-
 const IconHome = () => (
   <IconBase>
     <path d="M3 11l9-7 9 7" />
     <path d="M5 10v10h14V10" />
-  </IconBase>
-)
-
-const IconMoneyBag = () => (
-  <IconBase>
-    <path d="M9 4h6l-2 3h-2z" />
-    <path d="M7 7h10l2 3-2 11H7L5 10z" />
-    <path d="M10 12h4" />
-  </IconBase>
-)
-
-const IconBag = () => (
-  <IconBase>
-    <path d="M6 8h12l-1 12H7z" />
-    <path d="M9 8V6a3 3 0 0 1 6 0v2" />
-  </IconBase>
-)
-
-const IconScissors = () => (
-  <IconBase>
-    <circle cx="6" cy="6" r="2" />
-    <circle cx="6" cy="18" r="2" />
-    <path d="M8 8l10 10" />
-    <path d="M8 16l10-10" />
-  </IconBase>
-)
-
-const IconGift = () => (
-  <IconBase>
-    <rect x="4" y="10" width="16" height="10" />
-    <path d="M12 10v10" />
-    <path d="M4 10h16" />
-    <path d="M7 6c0-1.5 1.5-2 3-1 1.5 1-1 3-3 1z" />
-    <path d="M17 6c0-1.5-1.5-2-3-1-1.5 1 1 3 3 1z" />
   </IconBase>
 )
 
@@ -337,80 +254,65 @@ const IconBank = () => (
   </IconBase>
 )
 
-const IconCalculator = () => (
-  <IconBase>
-    <rect x="5" y="4" width="14" height="16" rx="2" />
-    <path d="M8 8h8" />
-    <path d="M8 12h2" />
-    <path d="M12 12h2" />
-    <path d="M8 16h2" />
-    <path d="M12 16h2" />
-  </IconBase>
-)
-
-const IconQuestion = () => (
-  <IconBase>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.9.3-1.5 1.1-1.5 2.1" />
-    <circle cx="12" cy="18" r="0.5" />
-  </IconBase>
-)
-
-const IconStar = () => (
-  <IconBase>
-    <path d="M12 3l3 6 6 .9-4.5 4.3 1.1 6.2L12 17l-5.6 3.4 1.1-6.2L3 9.9 9 9z" />
-  </IconBase>
-)
-
-const IconCart = () => (
-  <IconBase>
-    <circle cx="9" cy="19" r="1" />
-    <circle cx="17" cy="19" r="1" />
-    <path d="M3 5h2l2.2 9h10.3l2-7H7" />
-  </IconBase>
-)
-
-const IconFlower = () => (
-  <IconBase>
-    <circle cx="12" cy="12" r="2" />
-    <path d="M12 4c2 0 2 2 2 2s-2 0-2-2" />
-    <path d="M12 4c-2 0-2 2-2 2s2 0 2-2" />
-    <path d="M20 12c0 2-2 2-2 2s0-2 2-2" />
-    <path d="M20 12c0-2-2-2-2-2s0 2 2 2" />
-    <path d="M12 20c2 0 2-2 2-2s-2 0-2 2" />
-    <path d="M12 20c-2 0-2-2-2-2s2 0 2 2" />
-    <path d="M4 12c0 2 2 2 2 2s0-2-2-2" />
-    <path d="M4 12c0-2 2-2 2-2s0 2-2 2" />
-  </IconBase>
-)
-
-const normalizeCategoryName = (name: string) => name.replace(/\s/g, '')
-
 const CATEGORY_ICON_CHOICES = [
-  { key: 'food', label: '食費', icon: <IconFood /> },
-  { key: 'daily', label: '日用品', icon: <IconBroom /> },
-  { key: 'fashion', label: '服・美容', icon: <IconShirt /> },
-  { key: 'hobby', label: '趣味', icon: <IconRacket /> },
-  { key: 'transport', label: '交通', icon: <IconTrain /> },
-  { key: 'books', label: '本・雑誌', icon: <IconBook /> },
-  { key: 'cashless', label: 'キャッシュレス', icon: <IconCoins /> },
-  { key: 'medical', label: '医療', icon: <IconCross /> },
-  { key: 'housing', label: '住まい', icon: <IconHome /> },
-  { key: 'savings', label: '貯金', icon: <IconMoneyBag /> },
-  { key: 'other', label: 'その他', icon: <IconBag /> },
-  { key: 'diff', label: '差分', icon: <IconScissors /> },
-  { key: 'gift', label: 'プレゼント', icon: <IconGift /> },
-  { key: 'donation', label: 'ふるさと納税', icon: <IconArrow /> },
-  { key: 'folder', label: 'カテゴリ設定', icon: <IconFolder /> },
+  'restaurant',
+  'local_cafe',
+  'lunch_dining',
+  'local_bar',
+  'local_grocery_store',
+  'cleaning_services',
+  'checkroom',
+  'face',
+  'spa',
+  'sports_tennis',
+  'fitness_center',
+  'train',
+  'directions_bus',
+  'directions_car',
+  'local_gas_station',
+  'flight',
+  'menu_book',
+  'school',
+  'subscriptions',
+  'payments',
+  'account_balance',
+  'medical_services',
+  'local_hospital',
+  'healing',
+  'home',
+  'apartment',
+  'garage',
+  'savings',
+  'child_care',
+  'pets',
+  'local_florist',
+  'movie',
+  'music_note',
+  'travel',
+  'festival',
+  'shopping_bag',
+  'redeem',
+  'volunteer_activism',
+  'category',
+  'content_cut',
+  'settings',
 ]
 
-const CATEGORY_ICON_MAP = Object.fromEntries(CATEGORY_ICON_CHOICES.map((item) => [item.key, item.icon]))
+const renderMaterialIcon = (name: string, className?: string) => (
+  <span className={['material-symbols-outlined', className].filter(Boolean).join(' ')}>{name}</span>
+)
 
-const getCategoryIcon = (name: string, iconKey?: string | null) => {
-  if (iconKey && CATEGORY_ICON_MAP[iconKey]) return CATEGORY_ICON_MAP[iconKey]
-  const normalized = normalizeCategoryName(name)
-  const match = CATEGORY_ICON_CHOICES.find((item) => normalizeCategoryName(item.label) === normalized)
-  return match?.icon ?? null
+const getCategoryIcon = (iconKey?: string | null) => {
+  if (!iconKey) return null
+  return renderMaterialIcon(iconKey)
+}
+
+const getPaymentIcon = (method?: PaymentMethod | null) => {
+  if (!method) return renderMaterialIcon('payments')
+  if (method.type === 'bank') return renderMaterialIcon('account_balance')
+  if (method.type === 'emoney') return renderMaterialIcon('account_balance_wallet')
+  if (method.type === 'card') return renderMaterialIcon('credit_card')
+  return renderMaterialIcon('payments')
 }
 
 const buildCalendar = (month: dayjs.Dayjs, totals: Map<string, DayTotals>) => {
@@ -438,19 +340,24 @@ const buildCalendar = (month: dayjs.Dayjs, totals: Map<string, DayTotals>) => {
   return days
 }
 
-const computeReport = (entries: Entry[], categories: EntryCategory[], range: 'week' | 'month' | 'year') => {
-  const now = dayjs()
-  let start = now.startOf('month')
-  let end = now.endOf('month')
+const getRangeBounds = (range: 'week' | 'month' | 'year', base = dayjs()) => {
+  let start = base.startOf('month')
+  let end = base.endOf('month')
 
   if (range === 'week') {
-    const day = (now.day() + 6) % 7
-    start = now.subtract(day, 'day').startOf('day')
+    const day = (base.day() + 6) % 7
+    start = base.subtract(day, 'day').startOf('day')
     end = start.add(6, 'day').endOf('day')
   } else if (range === 'year') {
-    start = now.startOf('year')
-    end = now.endOf('year')
+    start = base.startOf('year')
+    end = base.endOf('year')
   }
+
+  return { start, end }
+}
+
+const computeReport = (entries: Entry[], categories: EntryCategory[], range: 'week' | 'month' | 'year') => {
+  const { start, end } = getRangeBounds(range)
 
   const summaryTotals: ReportSummary = { income: 0, expense: 0 }
   const categoryMaps: Record<EntryType, Map<string, number>> = {
@@ -470,18 +377,28 @@ const computeReport = (entries: Entry[], categories: EntryCategory[], range: 'we
 
   const categoryTotalsByType: Record<EntryType, CategoryTotal[]> = {
     income: Array.from(categoryMaps.income.entries())
-      .map(([id, total]) => ({
-        id,
-        total,
-        name: categories.find((category) => category.id === id)?.name ?? '未分類',
-      }))
+      .map(([id, total]) => {
+        const category = categories.find((item) => item.id === id)
+        return {
+          id,
+          total,
+          name: category?.name ?? '未分類',
+          icon_key: category?.icon_key ?? null,
+          color: category?.color ?? null,
+        }
+      })
       .sort((a, b) => b.total - a.total),
     expense: Array.from(categoryMaps.expense.entries())
-      .map(([id, total]) => ({
-        id,
-        total,
-        name: categories.find((category) => category.id === id)?.name ?? '未分類',
-      }))
+      .map(([id, total]) => {
+        const category = categories.find((item) => item.id === id)
+        return {
+          id,
+          total,
+          name: category?.name ?? '未分類',
+          icon_key: category?.icon_key ?? null,
+          color: category?.color ?? null,
+        }
+      })
       .sort((a, b) => b.total - a.total),
   }
 
@@ -490,42 +407,31 @@ const computeReport = (entries: Entry[], categories: EntryCategory[], range: 'we
 
 const buildReportSeries = (entries: Entry[], range: 'week' | 'month' | 'year', entryType: EntryType) => {
   const now = dayjs()
-  let start = now.startOf('month')
-  let end = now.endOf('month')
-  let points: { key: string; label: string }[] = []
-
-  if (range === 'week') {
-    start = now.startOf('week')
-    end = start.add(6, 'day').endOf('day')
-    points = Array.from({ length: 7 }, (_, index) => {
-      const date = start.add(index, 'day')
-      return { key: date.format('YYYY-MM-DD'), label: date.format('dd') }
-    })
-  } else if (range === 'year') {
-    start = now.startOf('year')
-    end = now.endOf('year')
-    points = Array.from({ length: 12 }, (_, index) => {
-      const date = start.add(index, 'month')
-      return { key: date.format('YYYY-MM'), label: date.format('M月') }
-    })
-  } else {
-    const daysInMonth = end.date()
-    points = Array.from({ length: daysInMonth }, (_, index) => {
-      const date = start.add(index, 'day')
-      return { key: date.format('YYYY-MM-DD'), label: date.format('D') }
-    })
-  }
+  const { start, end } = getRangeBounds(range, now)
+  const unit = range === 'year' ? 'month' : 'day'
+  const maxPoints = range === 'year' ? 12 : range === 'month' ? end.date() : 7
+  const elapsed = unit === 'month' ? now.diff(start, 'month') : now.diff(start, 'day')
+  const count = Math.min(maxPoints + 1, elapsed + 2)
+  const points = Array.from({ length: Math.max(1, count) }, (_, index) => {
+    const date = start.add(index, unit)
+    return {
+      key: unit === 'month' ? date.format('YYYY-MM') : date.format('YYYY-MM-DD'),
+      label: range === 'year' ? date.format('M月') : range === 'week' ? date.format('dd') : date.format('D'),
+    }
+  })
+  const seriesEnd = start.add(Math.max(0, count - 1), unit).endOf(unit)
 
   const totals = new Map<string, number>()
   entries.forEach((entry) => {
     if (entry.entry_type !== entryType) return
     const date = dayjs(entry.occurred_at)
-    if (date.isBefore(start) || date.isAfter(end)) return
+    if (date.isBefore(start) || date.isAfter(seriesEnd)) return
     const key = range === 'year' ? date.format('YYYY-MM') : date.format('YYYY-MM-DD')
     totals.set(key, (totals.get(key) ?? 0) + entry.amount)
   })
 
   return points.map((point) => ({
+    key: point.key,
     label: point.label,
     total: totals.get(point.key) ?? 0,
   }))
@@ -553,18 +459,28 @@ const buildReportFromApi = (data: ReportResponse, categories: EntryCategory[]): 
 
   const categoryTotalsByType: Record<EntryType, CategoryTotal[]> = {
     income: Array.from(byCategory.income.entries())
-      .map(([id, total]) => ({
-        id,
-        total,
-        name: categories.find((category) => category.id === id)?.name ?? '未分類',
-      }))
+      .map(([id, total]) => {
+        const category = categories.find((item) => item.id === id)
+        return {
+          id,
+          total,
+          name: category?.name ?? '未分類',
+          icon_key: category?.icon_key ?? null,
+          color: category?.color ?? null,
+        }
+      })
       .sort((a, b) => b.total - a.total),
     expense: Array.from(byCategory.expense.entries())
-      .map(([id, total]) => ({
-        id,
-        total,
-        name: categories.find((category) => category.id === id)?.name ?? '未分類',
-      }))
+      .map(([id, total]) => {
+        const category = categories.find((item) => item.id === id)
+        return {
+          id,
+          total,
+          name: category?.name ?? '未分類',
+          icon_key: category?.icon_key ?? null,
+          color: category?.color ?? null,
+        }
+      })
       .sort((a, b) => b.total - a.total),
   }
 
@@ -719,16 +635,12 @@ function App() {
 
   const handleAddCategory = async (name: string, type: string) => {
     const now = new Date().toISOString()
-    const normalized = normalizeCategoryName(name)
-    const matchedIcon = CATEGORY_ICON_CHOICES.find(
-      (choice) => normalizeCategoryName(choice.label) === normalized
-    )?.key
     const category: EntryCategory = {
       id: crypto.randomUUID(),
       family_id: getFamilyId(),
       name,
       type,
-      icon_key: matchedIcon ?? CATEGORY_ICON_CHOICES[0]?.key ?? null,
+      icon_key: null,
       color: CATEGORY_COLORS[(entryCategories?.length ?? 0) % CATEGORY_COLORS.length],
       sort_order: (entryCategories?.length ?? 0) + 1,
       created_at: now,
@@ -852,7 +764,9 @@ function App() {
 
   const handleOpenPayment = (type: PaymentType) => {
     setPaymentType(type)
-    handleOpenPage('payment-settings')
+    setReturnPage(page === 'other-settings' ? 'other-settings' : page === 'balance' ? 'balance' : 'main')
+    setPage('payment-settings')
+    setMenuOpen(false)
   }
 
   const handleOpenEntryInput = (seed: EntryInputSeed, tab: TabKey = activeTab) => {
@@ -1051,11 +965,6 @@ function App() {
           <MenuItem icon={<IconCoins />} label="予算設定" disabled />
           <MenuItem icon={<IconArrow />} label="定期的な収入/支出" onClick={() => handleOpenPage('recurring-settings')} />
           <MenuItem icon={<IconSettings />} label="その他設定" onClick={() => handleOpenPage('other-settings')} />
-          <MenuDivider />
-          <MenuItem icon={<IconQuestion />} label="サポート" disabled />
-          <MenuItem icon={<IconStar />} label="カケイを応援！" disabled />
-          <MenuItem icon={<IconCart />} label="広告非表示" disabled />
-          <MenuItem icon={<IconFlower />} label="SakuraApps" disabled />
         </div>
       </div>
 
@@ -1077,8 +986,6 @@ const MenuItem = ({ icon, label, onClick, disabled }: MenuItemProps) => (
     <span>{label}</span>
   </button>
 )
-
-const MenuDivider = () => <div className="menu-divider" />
 
 type HomeTabProps = {
   entries: Entry[]
@@ -1133,7 +1040,6 @@ const HomeTab = ({
       <div className="summary-panel">
         <span>収支</span>
         <strong>¥{formatAmount(monthSummary.balance)}</strong>
-        <span className="pill">利用</span>
       </div>
       <div className="summary-progress">
         <span style={{ width: `${Math.min(100, ratio * 100)}%` }} />
@@ -1160,7 +1066,7 @@ const HomeTab = ({
         {visibleCategories.length === 0 && <p className="muted">カテゴリがありません</p>}
         {visibleCategories.map((category, index) => {
           const color = category.color ?? CATEGORY_COLORS[index % CATEGORY_COLORS.length]
-          const icon = getCategoryIcon(category.name, category.icon_key)
+          const icon = getCategoryIcon(category.icon_key)
           return (
             <button
               type="button"
@@ -1188,9 +1094,7 @@ const HomeTab = ({
           )
         })}
         <button type="button" className="category-card settings" onClick={onOpenCategorySettings}>
-          <span className="category-icon">
-            <IconFolder />
-          </span>
+          <span className="category-icon">{renderMaterialIcon('folder')}</span>
           <span className="category-label">カテゴリ設定</span>
         </button>
       </div>
@@ -1258,13 +1162,11 @@ const EntryInputPage = ({ seed, categories, paymentMethods, onSave }: EntryInput
   }, [entryCategoryId, visibleCategories])
 
   const selectedCategory = visibleCategories.find((category) => category.id === entryCategoryId)
+  const isEditing = Boolean(seed.id)
 
   const dateTime = useMemo(() => {
     return dayjs(`${dateValue}T${timeValue}`)
   }, [dateValue, timeValue])
-
-  const weekdayLabels = ['日', '月', '火', '水', '木', '金', '土']
-  const dateLabel = `${dateTime.format('YYYY年 M月D日')} (${weekdayLabels[dateTime.day()]})`
 
   const handleAppend = (value: string) => {
     if (awaitingSubmit) {
@@ -1275,6 +1177,11 @@ const EntryInputPage = ({ seed, categories, paymentMethods, onSave }: EntryInput
       setFreshInput(true)
     }
     setDisplayValue((prev) => {
+      if (value === '.') {
+        if (prev.includes('.')) return prev
+        if (freshInput || prev === '0') return '0.'
+        return `${prev}.`
+      }
       if (freshInput || prev === '0') {
         if (value === '00') return '0'
         return value
@@ -1360,7 +1267,8 @@ const EntryInputPage = ({ seed, categories, paymentMethods, onSave }: EntryInput
     })
   }
 
-  const primaryLabel = operationUsed && !awaitingSubmit ? '=' : '入力'
+  const baseLabel = isEditing ? '編集' : '入力'
+  const primaryLabel = operationUsed && !awaitingSubmit ? '=' : baseLabel
 
   const handleCyclePaymentMethod = () => {
     if (!paymentMethods.length) return
@@ -1381,7 +1289,6 @@ const EntryInputPage = ({ seed, categories, paymentMethods, onSave }: EntryInput
             value={dateValue}
             onChange={(event) => setDateValue(event.target.value)}
           />
-          <span>{dateLabel}</span>
         </div>
         <input
           type="time"
@@ -1396,9 +1303,7 @@ const EntryInputPage = ({ seed, categories, paymentMethods, onSave }: EntryInput
           className="category-icon"
           style={{ background: selectedCategory?.color ?? '#d9554c' }}
         >
-          {selectedCategory
-            ? getCategoryIcon(selectedCategory.name, selectedCategory.icon_key) ?? selectedCategory.name.slice(0, 1)
-            : '?'}
+          {selectedCategory ? getCategoryIcon(selectedCategory.icon_key) ?? selectedCategory.name.slice(0, 1) : '?'}
         </span>
         <select value={entryCategoryId} onChange={(event) => setEntryCategoryId(event.target.value)}>
           <option value="">カテゴリ</option>
@@ -1461,15 +1366,23 @@ const EntryInputPage = ({ seed, categories, paymentMethods, onSave }: EntryInput
         <button type="button" className="calc-key" onClick={() => handleAppend('0')}>
           0
         </button>
+        <button type="button" className="calc-key" onClick={() => handleAppend('.')}>
+          .
+        </button>
         <button type="button" className="calc-key operator" onClick={() => handleOperator('+')}>
           +
         </button>
       </div>
 
-      <div className="entry-actions">
+      <div className={`entry-actions ${isEditing ? 'editing' : ''}`}>
         <button type="button" className="entry-method" onClick={handleCyclePaymentMethod}>
           {paymentLabel}
         </button>
+        {isEditing && (
+          <button type="button" className="entry-clear" onClick={handleClear}>
+            金額削除
+          </button>
+        )}
         <button
           type="button"
           className="primary"
@@ -1580,6 +1493,37 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
     )
   }, [selectedEntries])
 
+  const renderEntryButton = (entry: Entry) => {
+    const category = entry.entry_category_id ? categoryMap.get(entry.entry_category_id) : null
+    const method = entry.payment_method_id ? paymentMap.get(entry.payment_method_id) : null
+    const memoValue = entry.memo?.trim()
+    const paymentClass = method?.type ?? 'unknown'
+    const categoryColor = category?.color ?? '#d9554c'
+    const categoryIcon = getCategoryIcon(category?.icon_key)
+    const categoryFallback = category?.name?.slice(0, 1) ?? '?'
+
+    return (
+      <button key={entry.id} type="button" className="entry-button" onClick={() => onEdit(entry)}>
+        <div className="entry-row-main">
+          <span className="entry-category-icon" style={{ background: categoryColor }}>
+            {categoryIcon ?? <span className="category-fallback">{categoryFallback}</span>}
+          </span>
+          <div className="entry-info">
+            <div className="entry-title-row">
+              <span className={`badge ${entry.entry_type}`}>{entry.entry_type === 'income' ? '収入' : '支出'}</span>
+              <strong>¥{formatAmount(entry.amount)}</strong>
+            </div>
+            <div className="entry-details">
+              <span>{category?.name ?? '未分類'}</span>
+              {memoValue && <span>{memoValue}</span>}
+            </div>
+          </div>
+          <span className={`entry-payment-icon ${paymentClass}`}>{getPaymentIcon(method)}</span>
+        </div>
+      </button>
+    )
+  }
+
   const totalForRatio = monthTotals.income + monthTotals.expense
   const ratio = totalForRatio > 0 ? monthTotals.expense / totalForRatio : 0
 
@@ -1613,7 +1557,6 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
       <div className="summary-panel">
         <span>支出</span>
         <strong>¥{formatAmount(monthTotals.expense)}</strong>
-        <span className="pill">利用</span>
       </div>
       <div className="summary-progress">
         <span style={{ width: `${Math.min(100, ratio * 100)}%` }} />
@@ -1625,38 +1568,14 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
           {groupedEntries.map((group) => (
             <li key={group.date.format('YYYY-MM-DD')} className="entry-group">
               <div className="entry-group-header">
-                <strong>{`${group.date.format('M/D')} (${weekdayLabels[group.date.day()]})`}</strong>
+                <strong className="entry-group-date">{`${group.date.format('M/D')} (${weekdayLabels[group.date.day()]})`}</strong>
                 <div className="entry-group-totals">
-                  <span>収入 ¥{formatAmount(group.totals.income)}</span>
-                  <span>支出 ¥{formatAmount(group.totals.expense)}</span>
+                  <span className="badge income">収入 ¥{formatAmount(group.totals.income)}</span>
+                  <span className="badge expense">支出 ¥{formatAmount(group.totals.expense)}</span>
                 </div>
               </div>
               <div className="entry-group-list">
-                {group.entries.map((entry) => {
-                  const category = entry.entry_category_id ? categoryMap.get(entry.entry_category_id) : null
-                  const method = entry.payment_method_id ? paymentMap.get(entry.payment_method_id) : null
-                  return (
-                    <button
-                      key={entry.id}
-                      type="button"
-                      className="entry-button"
-                      onClick={() => onEdit(entry)}
-                    >
-                      <span className={`badge ${entry.entry_type}`}>
-                        {entry.entry_type === 'income' ? '収入' : '支出'}
-                      </span>
-                      <div className="entry-main">
-                        <strong>{formatAmount(entry.amount)}</strong>
-                        <span>{dayjs(entry.occurred_at).format('HH:mm')}</span>
-                      </div>
-                      <div className="entry-sub">
-                        <span>{category?.name ?? '未分類'}</span>
-                        <span>{method?.name ?? '未設定'}</span>
-                        <span>{entry.memo ?? ''}</span>
-                      </div>
-                    </button>
-                  )
-                })}
+                {group.entries.map((entry) => renderEntryButton(entry))}
               </div>
             </li>
           ))}
@@ -1705,32 +1624,15 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
       {view === 'calendar' && (
         <div className="calendar-detail">
           <div className="entry-group-header">
-            <strong>{`${dayjs(selectedDate).format('M/D')} (${weekdayLabels[dayjs(selectedDate).day()]})`}</strong>
+            <strong className="entry-group-date">{`${dayjs(selectedDate).format('M/D')} (${weekdayLabels[dayjs(selectedDate).day()]})`}</strong>
             <div className="entry-group-totals">
-              <span>収入 ¥{formatAmount(selectedTotals.income)}</span>
-              <span>支出 ¥{formatAmount(selectedTotals.expense)}</span>
+              <span className="badge income">収入 ¥{formatAmount(selectedTotals.income)}</span>
+              <span className="badge expense">支出 ¥{formatAmount(selectedTotals.expense)}</span>
             </div>
           </div>
           <div className="entry-group-list">
             {selectedEntries.length === 0 && <p className="muted">この日の明細はありません</p>}
-            {selectedEntries.map((entry) => {
-              const category = entry.entry_category_id ? categoryMap.get(entry.entry_category_id) : null
-              const method = entry.payment_method_id ? paymentMap.get(entry.payment_method_id) : null
-              return (
-                <button key={entry.id} type="button" className="entry-button" onClick={() => onEdit(entry)}>
-                  <span className={`badge ${entry.entry_type}`}>{entry.entry_type === 'income' ? '収入' : '支出'}</span>
-                  <div className="entry-main">
-                    <strong>{formatAmount(entry.amount)}</strong>
-                    <span>{dayjs(entry.occurred_at).format('HH:mm')}</span>
-                  </div>
-                  <div className="entry-sub">
-                    <span>{category?.name ?? '未分類'}</span>
-                    <span>{method?.name ?? '未設定'}</span>
-                    <span>{entry.memo ?? ''}</span>
-                  </div>
-                </button>
-              )
-            })}
+            {selectedEntries.map((entry) => renderEntryButton(entry))}
           </div>
         </div>
       )}
@@ -1752,6 +1654,18 @@ const ReportsTab = ({ entries, categories }: ReportsTabProps) => {
 
   const localReport = useMemo(() => computeReport(entries, categories, range), [entries, categories, range])
   const [report, setReport] = useState<ReportData>(localReport)
+
+  const rangeInfo = useMemo(() => {
+    const { start, end } = getRangeBounds(range)
+    const label =
+      range === 'week'
+        ? `${start.format('YYYY/M/D')} - ${end.format('M/D')}`
+        : range === 'month'
+          ? start.format('YYYY年 M月')
+          : start.format('YYYY年')
+    const detail = `${start.format('YYYY/M/D')} 〜 ${end.format('YYYY/M/D')}`
+    return { label, detail }
+  }, [range])
 
   useEffect(() => {
     setReport(localReport)
@@ -1802,8 +1716,9 @@ const ReportsTab = ({ entries, categories }: ReportsTabProps) => {
   return (
     <section className="card">
       <div className="month-header">
-        <h2>{dayjs().format('YYYY年 M月')}</h2>
+        <h2>{rangeInfo.label}</h2>
       </div>
+      <div className="report-range">{rangeInfo.detail}</div>
       <div className="pill-toggle small">
         <button className={range === 'week' ? 'active' : ''} onClick={() => setRange('week')}>
           週
@@ -1838,19 +1753,21 @@ const ReportsTab = ({ entries, categories }: ReportsTabProps) => {
           </div>
         </div>
       ) : (
-        <div className="bar-chart">
-          {(() => {
-            const maxValue = Math.max(...series.map((item) => item.total), 1)
-            return series.map((point) => {
-              const height = Math.round((point.total / maxValue) * 100)
-              return (
-                <div key={point.label} className="bar-item">
-                  <div className="bar-value" style={{ height: `${height}%` }} />
-                  <span className="bar-label">{point.label}</span>
-                </div>
-              )
-            })
-          })()}
+        <div className="bar-scroll">
+          <div className="bar-chart">
+            {(() => {
+              const maxValue = Math.max(...series.map((item) => item.total), 1)
+              return series.map((point) => {
+                const height = Math.round((point.total / maxValue) * 100)
+                return (
+                  <div key={point.key} className="bar-item">
+                    <div className="bar-value" style={{ height: `${height}%` }} />
+                    <span className="bar-label">{point.label}</span>
+                  </div>
+                )
+              })
+            })()}
+          </div>
         </div>
       )}
 
@@ -1883,7 +1800,7 @@ const ReportsTab = ({ entries, categories }: ReportsTabProps) => {
               <li key={item.id}>
                 <div className="entry-main">
                   <span className="mini-icon" style={{ background: color }}>
-                    {getCategoryIcon(item.name) ?? item.name.slice(0, 1)}
+                    {getCategoryIcon(item.icon_key) ?? item.name.slice(0, 1)}
                   </span>
                   <strong>{item.name}</strong>
                 </div>
@@ -2043,7 +1960,6 @@ type CategorySettingsPageProps = {
 
 const CategorySettingsPage = ({ categories, onAdd, onSave, onDelete }: CategorySettingsPageProps) => {
   const [entryType, setEntryType] = useState<EntryType>('expense')
-  const [collapsed, setCollapsed] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [name, setName] = useState('')
   const [editingCategory, setEditingCategory] = useState<EntryCategory | null>(null)
@@ -2071,10 +1987,7 @@ const CategorySettingsPage = ({ categories, onAdd, onSave, onDelete }: CategoryS
   const openEdit = (category: EntryCategory) => {
     setEditingCategory(category)
     setEditName(category.name)
-    const matchedIcon = CATEGORY_ICON_CHOICES.find(
-      (choice) => normalizeCategoryName(choice.label) === normalizeCategoryName(category.name)
-    )?.key
-    setEditIconKey(category.icon_key ?? matchedIcon ?? null)
+    setEditIconKey(category.icon_key ?? null)
     setEditColor(category.color ?? CATEGORY_COLORS[0])
   }
 
@@ -2102,13 +2015,6 @@ const CategorySettingsPage = ({ categories, onAdd, onSave, onDelete }: CategoryS
 
   return (
     <div className="page">
-      <div className="toggle-row">
-        <span>折りたたむ</span>
-        <button className={`toggle-switch ${collapsed ? 'active' : ''}`} onClick={() => setCollapsed(!collapsed)}>
-          {collapsed ? 'ON' : 'OFF'}
-        </button>
-      </div>
-
       <div className="pill-toggle">
         <button
           type="button"
@@ -2133,24 +2039,48 @@ const CategorySettingsPage = ({ categories, onAdd, onSave, onDelete }: CategoryS
               className="category-icon"
               style={{ background: category.color ?? CATEGORY_COLORS[index % CATEGORY_COLORS.length] }}
             >
-              {getCategoryIcon(category.name, category.icon_key) ?? (
+              {getCategoryIcon(category.icon_key) ?? (
                 <span className="category-fallback">{category.name.slice(0, 1)}</span>
               )}
             </span>
-            <strong>{category.name}</strong>
+            <strong className="category-title">{category.name}</strong>
             <div className="category-actions">
-              <button type="button" className="text-button" onClick={() => openEdit(category)}>
-                編集
-              </button>
-              <button type="button" className="text-button" onClick={() => onDelete(category)}>
-                削除
-              </button>
-              <div className="reorder-buttons">
-                <button onClick={() => handleMove(category, 'up')} disabled={index === 0}>
-                  ↑
+              <div className="category-action-buttons">
+                <button
+                  type="button"
+                  className="icon-button-small"
+                  aria-label="編集"
+                  onClick={() => openEdit(category)}
+                >
+                  {renderMaterialIcon('edit')}
                 </button>
-                <button onClick={() => handleMove(category, 'down')} disabled={index === filtered.length - 1}>
-                  ↓
+                <button
+                  type="button"
+                  className="icon-button-small danger"
+                  aria-label="削除"
+                  onClick={() => onDelete(category)}
+                >
+                  {renderMaterialIcon('delete')}
+                </button>
+              </div>
+              <div className="reorder-buttons">
+                <button
+                  type="button"
+                  className="icon-button-small"
+                  aria-label="上へ"
+                  onClick={() => handleMove(category, 'up')}
+                  disabled={index === 0}
+                >
+                  {renderMaterialIcon('arrow_upward')}
+                </button>
+                <button
+                  type="button"
+                  className="icon-button-small"
+                  aria-label="下へ"
+                  onClick={() => handleMove(category, 'down')}
+                  disabled={index === filtered.length - 1}
+                >
+                  {renderMaterialIcon('arrow_downward')}
                 </button>
               </div>
             </div>
@@ -2191,15 +2121,15 @@ const CategorySettingsPage = ({ categories, onAdd, onSave, onDelete }: CategoryS
               onChange={(event) => setEditName(event.target.value)}
             />
             <div className="icon-picker">
-              {CATEGORY_ICON_CHOICES.map((choice) => (
+              {CATEGORY_ICON_CHOICES.map((iconName) => (
                 <button
-                  key={choice.key}
+                  key={iconName}
                   type="button"
-                  className={`icon-choice ${editIconKey === choice.key ? 'active' : ''}`}
-                  onClick={() => setEditIconKey(choice.key)}
+                  className={`icon-choice ${editIconKey === iconName ? 'active' : ''}`}
+                  aria-label={iconName}
+                  onClick={() => setEditIconKey(iconName)}
                 >
-                  <span className="icon-preview">{choice.icon}</span>
-                  <span>{choice.label}</span>
+                  <span className="icon-preview">{renderMaterialIcon(iconName)}</span>
                 </button>
               ))}
             </div>
@@ -2331,7 +2261,7 @@ const RecurringSettingsPage = ({ rules, categories, paymentMethods, onAdd }: Rec
           <div className="rule-list">
             {items.map((rule) => {
               const category = categories.find((item) => item.id === rule.entry_category_id)
-              const icon = category ? getCategoryIcon(category.name, category.icon_key) : null
+              const icon = category ? getCategoryIcon(category.icon_key) : null
               return (
                 <div key={rule.id} className="rule-card">
                   <span className="rule-icon">{icon ?? <IconHome />}</span>
@@ -2446,7 +2376,7 @@ const PaymentSettingsPage = ({ paymentType, paymentMethods, onAdd, onDelete }: P
       <ul className="category-list">
         {filtered.map((method) => (
           <li key={method.id} className="category-row">
-            <span className="category-icon" style={{ background: '#4c6b0f' }}>
+            <span className="category-icon" style={{ background: 'var(--accent-dark)' }}>
               <IconCard />
             </span>
             <strong>{method.name}</strong>
@@ -2492,13 +2422,10 @@ type OtherSettingsPageProps = {
 
 const OtherSettingsPage = ({ onOpenPayment }: OtherSettingsPageProps) => {
   const items = [
-    { label: '家計簿', icon: <IconBook />, action: () => onOpenPayment('cash') },
     { label: '現金(お財布)', icon: <IconWallet />, action: () => onOpenPayment('cash') },
     { label: '銀行口座', icon: <IconBank />, action: () => onOpenPayment('bank') },
     { label: '電子マネー', icon: <IconCard />, action: () => onOpenPayment('emoney') },
     { label: 'クレジットカード', icon: <IconCard />, action: () => onOpenPayment('card') },
-    { label: 'オプション', icon: <IconSettings /> },
-    { label: 'コダワリ', icon: <IconCalculator /> },
   ]
 
   return (
