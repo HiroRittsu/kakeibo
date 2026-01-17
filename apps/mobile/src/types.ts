@@ -9,6 +9,7 @@ export type Entry = {
   payment_method_id: string | null
   memo: string | null
   occurred_at: string
+  occurred_on: string
   recurring_rule_id: string | null
   created_at: string
   updated_at: string

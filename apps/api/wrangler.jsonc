@@ -9,7 +9,10 @@
       "database_name": "kakeibo",
       "database_id": "ca2d9748-8903-4de5-9808-7f686f37abf1"
     }
-  ]
+  ],
+  "triggers": {
+    "crons": ["0 15 * * *"]
+  }
   // "compatibility_flags": [
   //   "nodejs_compat"
   // ],

@@ -31,6 +31,24 @@ kakeibo/
 └─ package.json            # workspaces
 ```
 
+## 反映手順（ローカル/リモート）
+### ローカル
+```
+npm run migrate:local --prefix apps/api
+npm run dev --prefix apps/api
+apps/api/node_modules/.bin/wrangler dev --test-scheduled --local --persist-to .wrangler/state
+```
+- 3行目は定期ルールの手動発火（起動直後に1回発火するので、ログ確認後に停止）
+
+### リモート
+```
+npm run migrate:remote --prefix apps/api
+npm run deploy --prefix apps/api
+npm run build --prefix apps/mobile
+apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name kakeibo-mobile --commit-dirty=true
+```
+- Cronは `apps/api/wrangler.jsonc` の `triggers.crons` で設定（UTC基準、JSTは+9時間）
+
 ## 主要要件
 - 無料枠に収めるため低運用コストで進める。
 - オフラインでも入力できる。
@@ -75,7 +93,8 @@ kakeibo/
 ## データモデル（概要）
 - entries: 収入/支出の明細を保持する本体テーブル。
   - 主な項目: id, family_id, entry_type, amount, entry_category_id, payment_method_id
-  - 付随項目: memo, occurred_at, recurring_rule_id, created_at, updated_at
+  - 付随項目: memo, occurred_at, occurred_on, recurring_rule_id, created_at, updated_at
+  - `occurred_on` は日付単位（YYYY-MM-DD）で保持し、定期ルールの冪等生成に使う。
 - monthly_balance: 月初の繰り越し残高を保持する。
   - 主な項目: family_id, ym (YYYY-MM), balance, is_closed, updated_at
 - recurring_rules: 定期収入/支出のルールを保持する。
@@ -107,7 +126,7 @@ kakeibo/
 - 生成済みエントリは `recurring_rule_id` で追跡できるが、編集は通常の明細編集と同じ扱い。
 - ルール変更時は過去のエントリを更新せず、次回発生日以降のみ新ルールを適用する。
 - 複数端末での重複生成を防ぐため、以下のいずれかで冪等化する。
-  - 例: `UNIQUE(family_id, recurring_rule_id, occurred_date)` の制約
+  - 例: `UNIQUE(family_id, recurring_rule_id, occurred_on)` の制約
   - 生成前の存在確認 + トランザクションでの作成
 
 ## カテゴリ統合（PC側）

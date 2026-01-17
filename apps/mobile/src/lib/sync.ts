@@ -7,9 +7,24 @@ const LAST_SYNC_KEY = 'last_sync'
 const getLastSync = () => localStorage.getItem(LAST_SYNC_KEY)
 const setLastSync = (value: string) => localStorage.setItem(LAST_SYNC_KEY, value)
 
+const toTokyoDateString = (value: string) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10)
+  const tokyo = new Date(date.getTime() + 9 * 60 * 60 * 1000)
+  return tokyo.toISOString().slice(0, 10)
+}
+
+const normalizeEntry = (entry: Entry): Entry => {
+  if (entry.occurred_on) return entry
+  return {
+    ...entry,
+    occurred_on: toTokyoDateString(entry.occurred_at),
+  }
+}
+
 const applyEntry = async (entry: Entry | null) => {
   if (!entry) return
-  await db.entries.put(entry)
+  await db.entries.put(normalizeEntry(entry))
 }
 
 const applyEntryCategory = async (entryCategory: EntryCategory | null) => {
@@ -56,7 +71,7 @@ const pullEntries = async () => {
   if (!response.ok) throw new Error('Failed to fetch entries')
   const data = (await response.json()) as { entries: Entry[] }
   if (data.entries?.length) {
-    await db.entries.bulkPut(data.entries)
+    await db.entries.bulkPut(data.entries.map((entry) => normalizeEntry(entry)))
   }
 }
 

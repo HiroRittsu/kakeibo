@@ -38,6 +38,142 @@ const getActorUserId = (c: Context<HonoEnv>) => {
 
 const nowIso = () => new Date().toISOString()
 
+const toTokyoDate = (date = new Date()) => {
+  const ms = date.getTime() + 9 * 60 * 60 * 1000
+  return new Date(ms)
+}
+
+const formatTokyoDate = (date: Date) => {
+  const year = date.getUTCFullYear()
+  const month = `${date.getUTCMonth() + 1}`.padStart(2, '0')
+  const day = `${date.getUTCDate()}`.padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const parseDateValue = (value?: string | null) => {
+  if (!value) return new Date()
+  const parsed = new Date(value)
+  if (!Number.isNaN(parsed.getTime())) return parsed
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const withTz = new Date(`${value}T00:00:00+09:00`)
+    if (!Number.isNaN(withTz.getTime())) return withTz
+  }
+  return new Date()
+}
+
+const formatOccurredOn = (occurredAt?: string | null) => {
+  const date = parseDateValue(occurredAt)
+  return formatTokyoDate(toTokyoDate(date))
+}
+
+type RecurringRuleRow = {
+  id: string
+  family_id: string
+  entry_type: 'income' | 'expense'
+  amount: number
+  entry_category_id: string | null
+  payment_method_id: string | null
+  memo: string | null
+  frequency: string | null
+  day_of_month: number | null
+  start_at: string
+  end_at: string | null
+  is_active: number | null
+}
+
+const getDueDay = (target: Date, ruleDay: number | null, fallback: Date) => {
+  const candidate = ruleDay ?? fallback.getUTCDate()
+  const daysInMonth = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate()
+  return Math.min(candidate, daysInMonth)
+}
+
+const shouldGenerateRule = (rule: RecurringRuleRow, targetTokyo: Date, targetDate: string) => {
+  const isActive = rule.is_active === null ? true : rule.is_active === 1
+  if (!isActive) return false
+
+  const startTokyo = toTokyoDate(parseDateValue(rule.start_at))
+  const startDate = formatTokyoDate(startTokyo)
+  if (targetDate < startDate) return false
+
+  if (rule.end_at) {
+    const endDate = formatTokyoDate(toTokyoDate(parseDateValue(rule.end_at)))
+    if (targetDate > endDate) return false
+  }
+
+  const frequency = rule.frequency ?? 'monthly'
+  if (frequency === 'weekly') {
+    const targetWeekday = targetTokyo.getUTCDay()
+    const ruleWeekday =
+      rule.day_of_month !== null && rule.day_of_month >= 0 && rule.day_of_month <= 6
+        ? rule.day_of_month
+        : startTokyo.getUTCDay()
+    return targetWeekday === ruleWeekday
+  }
+
+  if (frequency === 'bimonthly') {
+    const monthDiff =
+      (targetTokyo.getUTCFullYear() - startTokyo.getUTCFullYear()) * 12 +
+      (targetTokyo.getUTCMonth() - startTokyo.getUTCMonth())
+    if (monthDiff < 0 || monthDiff % 2 !== 0) return false
+    const dueDay = getDueDay(targetTokyo, rule.day_of_month, startTokyo)
+    return targetTokyo.getUTCDate() === dueDay
+  }
+
+  if (frequency === 'yearly') {
+    if (targetTokyo.getUTCMonth() !== startTokyo.getUTCMonth()) return false
+    const dueDay = getDueDay(targetTokyo, rule.day_of_month, startTokyo)
+    return targetTokyo.getUTCDate() === dueDay
+  }
+
+  const dueDay = getDueDay(targetTokyo, rule.day_of_month, startTokyo)
+  return targetTokyo.getUTCDate() === dueDay
+}
+
+const generateRecurringEntries = async (db: D1Database, baseDate = new Date()) => {
+  const targetTokyo = toTokyoDate(baseDate)
+  const targetDate = formatTokyoDate(targetTokyo)
+  const occurredAt = new Date(`${targetDate}T00:00:00+09:00`).toISOString()
+
+  const { results } = await db
+    .prepare('SELECT * FROM recurring_rules WHERE is_active = 1')
+    .all<RecurringRuleRow>()
+
+  if (!results?.length) return
+
+  for (const rule of results) {
+    if (!shouldGenerateRule(rule, targetTokyo, targetDate)) continue
+
+    const id = crypto.randomUUID()
+    const createdAt = nowIso()
+    const updatedAt = createdAt
+
+    const result = await db
+      .prepare(
+        'INSERT OR IGNORE INTO entries (id, family_id, entry_type, amount, entry_category_id, payment_method_id, memo, occurred_at, occurred_on, recurring_rule_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .bind(
+        id,
+        rule.family_id,
+        rule.entry_type,
+        Math.round(rule.amount),
+        rule.entry_category_id,
+        rule.payment_method_id,
+        rule.memo,
+        occurredAt,
+        targetDate,
+        rule.id,
+        createdAt,
+        updatedAt
+      )
+      .run()
+
+    const changes = (result as { meta?: { changes?: number } }).meta?.changes ?? 0
+    if (changes > 0) {
+      await recordAudit(db, rule.family_id, 'system', 'create', 'entries', id, `recurring ${rule.id}`)
+    }
+  }
+}
+
 const isEntryType = (value: unknown): value is 'income' | 'expense' => {
   return value === 'income' || value === 'expense'
 }
@@ -108,6 +244,7 @@ app.post('/entries', async (c) => {
   const id = typeof payload.id === 'string' ? payload.id : crypto.randomUUID()
   const memo = typeof payload.memo === 'string' ? payload.memo : null
   const occurredAt = typeof payload.occurred_at === 'string' ? payload.occurred_at : nowIso()
+  const occurredOn = formatOccurredOn(occurredAt)
   const entryCategoryId = typeof payload.entry_category_id === 'string' ? payload.entry_category_id : null
   const paymentMethodId = typeof payload.payment_method_id === 'string' ? payload.payment_method_id : null
   const recurringRuleId = typeof payload.recurring_rule_id === 'string' ? payload.recurring_rule_id : null
@@ -125,7 +262,7 @@ app.post('/entries', async (c) => {
 
   await db
     .prepare(
-      'INSERT INTO entries (id, family_id, entry_type, amount, entry_category_id, payment_method_id, memo, occurred_at, recurring_rule_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET entry_type = excluded.entry_type, amount = excluded.amount, entry_category_id = excluded.entry_category_id, payment_method_id = excluded.payment_method_id, memo = excluded.memo, occurred_at = excluded.occurred_at, recurring_rule_id = excluded.recurring_rule_id, updated_at = excluded.updated_at'
+      'INSERT INTO entries (id, family_id, entry_type, amount, entry_category_id, payment_method_id, memo, occurred_at, occurred_on, recurring_rule_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET entry_type = excluded.entry_type, amount = excluded.amount, entry_category_id = excluded.entry_category_id, payment_method_id = excluded.payment_method_id, memo = excluded.memo, occurred_at = excluded.occurred_at, occurred_on = excluded.occurred_on, recurring_rule_id = excluded.recurring_rule_id, updated_at = excluded.updated_at'
     )
     .bind(
       id,
@@ -136,6 +273,7 @@ app.post('/entries', async (c) => {
       paymentMethodId,
       memo,
       occurredAt,
+      occurredOn,
       recurringRuleId,
       createdAt,
       updatedAt
@@ -183,6 +321,7 @@ app.patch('/entries/:id', async (c) => {
       : existing.amount
   const memo = typeof payload.memo === 'string' ? payload.memo : existing.memo
   const occurredAt = typeof payload.occurred_at === 'string' ? payload.occurred_at : existing.occurred_at
+  const occurredOn = formatOccurredOn(occurredAt)
   const entryCategoryId =
     typeof payload.entry_category_id === 'string' ? payload.entry_category_id : existing.entry_category_id
   const paymentMethodId =
@@ -196,7 +335,7 @@ app.patch('/entries/:id', async (c) => {
 
   await db
     .prepare(
-      'UPDATE entries SET entry_type = ?, amount = ?, entry_category_id = ?, payment_method_id = ?, memo = ?, occurred_at = ?, recurring_rule_id = ?, updated_at = ? WHERE id = ? AND family_id = ?'
+      'UPDATE entries SET entry_type = ?, amount = ?, entry_category_id = ?, payment_method_id = ?, memo = ?, occurred_at = ?, occurred_on = ?, recurring_rule_id = ?, updated_at = ? WHERE id = ? AND family_id = ?'
     )
     .bind(
       entryType,
@@ -205,6 +344,7 @@ app.patch('/entries/:id', async (c) => {
       paymentMethodId,
       memo,
       occurredAt,
+      occurredOn,
       recurringRuleId,
       updatedAt,
       id,
@@ -465,18 +605,6 @@ app.put('/monthly-balance/:ym', async (c) => {
   return c.json({ monthly_balance: monthlyBalance })
 })
 
-const toTokyoDate = (date = new Date()) => {
-  const ms = date.getTime() + 9 * 60 * 60 * 1000
-  return new Date(ms)
-}
-
-const formatTokyoDate = (date: Date) => {
-  const year = date.getUTCFullYear()
-  const month = `${date.getUTCMonth() + 1}`.padStart(2, '0')
-  const day = `${date.getUTCDate()}`.padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 const rangeFrom = (range: string) => {
   const tokyo = toTokyoDate()
   if (range === 'week') {
@@ -527,21 +655,21 @@ app.get('/reports', async (c) => {
   const db = c.env.DB
   const totals = await db
     .prepare(
-      'SELECT entry_type, SUM(amount) as total FROM entries WHERE family_id = ? AND occurred_at >= ? AND occurred_at < ? GROUP BY entry_type'
+      'SELECT entry_type, SUM(amount) as total FROM entries WHERE family_id = ? AND occurred_on >= ? AND occurred_on < ? GROUP BY entry_type'
     )
     .bind(familyId, from, to)
     .all()
 
   const categories = await db
     .prepare(
-      'SELECT entry_category_id, entry_type, SUM(amount) as total FROM entries WHERE family_id = ? AND occurred_at >= ? AND occurred_at < ? GROUP BY entry_category_id, entry_type'
+      'SELECT entry_category_id, entry_type, SUM(amount) as total FROM entries WHERE family_id = ? AND occurred_on >= ? AND occurred_on < ? GROUP BY entry_category_id, entry_type'
     )
     .bind(familyId, from, to)
     .all()
 
   const series = await db
     .prepare(
-      'SELECT date(occurred_at) as day, entry_type, SUM(amount) as total FROM entries WHERE family_id = ? AND occurred_at >= ? AND occurred_at < ? GROUP BY day, entry_type ORDER BY day'
+      'SELECT occurred_on as day, entry_type, SUM(amount) as total FROM entries WHERE family_id = ? AND occurred_on >= ? AND occurred_on < ? GROUP BY day, entry_type ORDER BY day'
     )
     .bind(familyId, from, to)
     .all()
@@ -570,4 +698,10 @@ app.get('/audit-logs', async (c) => {
 
 app.notFound((c) => c.json({ message: 'Not found' }, 404))
 
-export default app
+export default {
+  fetch: app.fetch,
+  scheduled: (event: { scheduledTime?: number }, env: Bindings, ctx: ExecutionContext) => {
+    const scheduledTime = typeof event.scheduledTime === 'number' ? event.scheduledTime : Date.now()
+    ctx.waitUntil(generateRecurringEntries(env.DB, new Date(scheduledTime)))
+  },
+}

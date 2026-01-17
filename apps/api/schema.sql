@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS entries (
   payment_method_id TEXT,
   memo TEXT,
   occurred_at TEXT NOT NULL,
+  occurred_on TEXT,
   recurring_rule_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -19,6 +20,12 @@ CREATE INDEX IF NOT EXISTS idx_entries_family_updated
 
 CREATE INDEX IF NOT EXISTS idx_entries_family_occurred
   ON entries (family_id, occurred_at);
+
+CREATE INDEX IF NOT EXISTS idx_entries_family_occurred_on
+  ON entries (family_id, occurred_on);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_recurring_unique
+  ON entries (family_id, recurring_rule_id, occurred_on);
 
 CREATE TABLE IF NOT EXISTS monthly_balance (
   family_id TEXT NOT NULL,

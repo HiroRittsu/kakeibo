@@ -128,6 +128,13 @@ const formatAmount = (amount: number) => {
   return new Intl.NumberFormat('ja-JP').format(amount)
 }
 
+const toTokyoDateString = (value: string) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10)
+  const tokyo = new Date(date.getTime() + 9 * 60 * 60 * 1000)
+  return tokyo.toISOString().slice(0, 10)
+}
+
 const buildEntryCreatePayload = (entry: Entry) => ({
   id: entry.id,
   entry_type: entry.entry_type,
@@ -136,6 +143,7 @@ const buildEntryCreatePayload = (entry: Entry) => ({
   payment_method_id: entry.payment_method_id,
   memo: entry.memo,
   occurred_at: entry.occurred_at,
+  occurred_on: entry.occurred_on,
   recurring_rule_id: entry.recurring_rule_id,
   client_updated_at: entry.updated_at,
 })
@@ -147,6 +155,7 @@ const buildEntryUpdatePayload = (entry: Entry, clientUpdatedAt: string | null) =
   payment_method_id: entry.payment_method_id,
   memo: entry.memo,
   occurred_at: entry.occurred_at,
+  occurred_on: entry.occurred_on,
   recurring_rule_id: entry.recurring_rule_id,
   client_updated_at: clientUpdatedAt,
 })
@@ -576,6 +585,7 @@ function App() {
   const handleSaveEntry = async (payload: EntryInputSeed) => {
     const now = new Date().toISOString()
     const existing = payload.id ? (entries ?? []).find((entry) => entry.id === payload.id) : null
+    const occurredOn = toTokyoDateString(payload.occurredAt)
     const entry: Entry = {
       id: existing?.id ?? crypto.randomUUID(),
       family_id: existing?.family_id ?? getFamilyId(),
@@ -585,6 +595,7 @@ function App() {
       payment_method_id: payload.paymentMethodId,
       memo: payload.memo,
       occurred_at: payload.occurredAt,
+      occurred_on: occurredOn,
       recurring_rule_id: existing?.recurring_rule_id ?? payload.recurringRuleId ?? null,
       created_at: existing?.created_at ?? payload.createdAt ?? now,
       updated_at: now,
