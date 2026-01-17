@@ -76,6 +76,7 @@ type RecurringRuleRow = {
   memo: string | null
   frequency: string | null
   day_of_month: number | null
+  holiday_adjustment: string | null
   start_at: string
   end_at: string | null
   is_active: number | null
@@ -85,6 +86,25 @@ const getDueDay = (target: Date, ruleDay: number | null, fallback: Date) => {
   const candidate = ruleDay ?? fallback.getUTCDate()
   const daysInMonth = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate()
   return Math.min(candidate, daysInMonth)
+}
+
+const normalizeHolidayAdjustment = (value?: string | null) => {
+  if (value === 'previous' || value === 'next') return value
+  return 'none'
+}
+
+const adjustForWeekend = (date: Date, adjustment: string) => {
+  const weekday = date.getUTCDay()
+  if (weekday !== 0 && weekday !== 6) return date
+  if (adjustment === 'previous') {
+    const delta = weekday === 0 ? -2 : -1
+    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + delta))
+  }
+  if (adjustment === 'next') {
+    const delta = weekday === 0 ? 1 : 2
+    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + delta))
+  }
+  return date
 }
 
 const shouldGenerateRule = (rule: RecurringRuleRow, targetTokyo: Date, targetDate: string) => {
@@ -101,32 +121,41 @@ const shouldGenerateRule = (rule: RecurringRuleRow, targetTokyo: Date, targetDat
   }
 
   const frequency = rule.frequency ?? 'monthly'
+  let baseDate: Date | null = null
+
   if (frequency === 'weekly') {
-    const targetWeekday = targetTokyo.getUTCDay()
     const ruleWeekday =
       rule.day_of_month !== null && rule.day_of_month >= 0 && rule.day_of_month <= 6
         ? rule.day_of_month
         : startTokyo.getUTCDay()
-    return targetWeekday === ruleWeekday
-  }
-
-  if (frequency === 'bimonthly') {
+    const diff = ruleWeekday - targetTokyo.getUTCDay()
+    baseDate = new Date(Date.UTC(targetTokyo.getUTCFullYear(), targetTokyo.getUTCMonth(), targetTokyo.getUTCDate() + diff))
+  } else if (frequency === 'bimonthly') {
     const monthDiff =
       (targetTokyo.getUTCFullYear() - startTokyo.getUTCFullYear()) * 12 +
       (targetTokyo.getUTCMonth() - startTokyo.getUTCMonth())
     if (monthDiff < 0 || monthDiff % 2 !== 0) return false
     const dueDay = getDueDay(targetTokyo, rule.day_of_month, startTokyo)
-    return targetTokyo.getUTCDate() === dueDay
-  }
-
-  if (frequency === 'yearly') {
+    baseDate = new Date(Date.UTC(targetTokyo.getUTCFullYear(), targetTokyo.getUTCMonth(), dueDay))
+  } else if (frequency === 'yearly') {
     if (targetTokyo.getUTCMonth() !== startTokyo.getUTCMonth()) return false
     const dueDay = getDueDay(targetTokyo, rule.day_of_month, startTokyo)
-    return targetTokyo.getUTCDate() === dueDay
+    baseDate = new Date(Date.UTC(targetTokyo.getUTCFullYear(), targetTokyo.getUTCMonth(), dueDay))
+  } else {
+    const dueDay = getDueDay(targetTokyo, rule.day_of_month, startTokyo)
+    baseDate = new Date(Date.UTC(targetTokyo.getUTCFullYear(), targetTokyo.getUTCMonth(), dueDay))
   }
 
-  const dueDay = getDueDay(targetTokyo, rule.day_of_month, startTokyo)
-  return targetTokyo.getUTCDate() === dueDay
+  if (!baseDate) return false
+  const baseDateStr = formatTokyoDate(baseDate)
+  if (baseDateStr < startDate) return false
+  if (rule.end_at) {
+    const endDate = formatTokyoDate(toTokyoDate(parseDateValue(rule.end_at)))
+    if (baseDateStr > endDate) return false
+  }
+
+  const adjusted = adjustForWeekend(baseDate, normalizeHolidayAdjustment(rule.holiday_adjustment))
+  return formatTokyoDate(adjusted) === targetDate
 }
 
 const generateRecurringEntries = async (db: D1Database, baseDate = new Date()) => {
@@ -513,6 +542,10 @@ app.post('/recurring-rules', async (c) => {
   const memo = typeof payload.memo === 'string' ? payload.memo : null
   const frequency = typeof payload.frequency === 'string' ? payload.frequency : 'monthly'
   const dayOfMonth = typeof payload.day_of_month === 'number' ? Math.round(payload.day_of_month) : null
+  const holidayAdjustment =
+    payload.holiday_adjustment === 'previous' || payload.holiday_adjustment === 'next'
+      ? payload.holiday_adjustment
+      : 'none'
   const startAt = typeof payload.start_at === 'string' ? payload.start_at : nowIso()
   const endAt = typeof payload.end_at === 'string' ? payload.end_at : null
   const isActive = typeof payload.is_active === 'boolean' ? payload.is_active : true
@@ -521,7 +554,7 @@ app.post('/recurring-rules', async (c) => {
 
   await c.env.DB
     .prepare(
-      'INSERT INTO recurring_rules (id, family_id, entry_type, amount, entry_category_id, payment_method_id, memo, frequency, day_of_month, start_at, end_at, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET entry_type = excluded.entry_type, amount = excluded.amount, entry_category_id = excluded.entry_category_id, payment_method_id = excluded.payment_method_id, memo = excluded.memo, frequency = excluded.frequency, day_of_month = excluded.day_of_month, start_at = excluded.start_at, end_at = excluded.end_at, is_active = excluded.is_active, updated_at = excluded.updated_at'
+      'INSERT INTO recurring_rules (id, family_id, entry_type, amount, entry_category_id, payment_method_id, memo, frequency, day_of_month, holiday_adjustment, start_at, end_at, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET entry_type = excluded.entry_type, amount = excluded.amount, entry_category_id = excluded.entry_category_id, payment_method_id = excluded.payment_method_id, memo = excluded.memo, frequency = excluded.frequency, day_of_month = excluded.day_of_month, holiday_adjustment = excluded.holiday_adjustment, start_at = excluded.start_at, end_at = excluded.end_at, is_active = excluded.is_active, updated_at = excluded.updated_at'
     )
     .bind(
       id,
@@ -533,6 +566,7 @@ app.post('/recurring-rules', async (c) => {
       memo,
       frequency,
       dayOfMonth,
+      holidayAdjustment,
       startAt,
       endAt,
       isActive ? 1 : 0,
@@ -641,6 +675,7 @@ app.get('/reports', async (c) => {
   const range = c.req.query('range') ?? 'month'
   const fromQuery = c.req.query('from')
   const toQuery = c.req.query('to')
+  const recurringOnly = c.req.query('recurring') === '1'
 
   let from = fromQuery
   let to = toQuery
@@ -653,23 +688,24 @@ app.get('/reports', async (c) => {
   }
 
   const db = c.env.DB
+  const recurringFilter = recurringOnly ? ' AND recurring_rule_id IS NOT NULL' : ''
   const totals = await db
     .prepare(
-      'SELECT entry_type, SUM(amount) as total FROM entries WHERE family_id = ? AND occurred_on >= ? AND occurred_on < ? GROUP BY entry_type'
+      `SELECT entry_type, SUM(amount) as total FROM entries WHERE family_id = ? AND occurred_on >= ? AND occurred_on < ?${recurringFilter} GROUP BY entry_type`
     )
     .bind(familyId, from, to)
     .all()
 
   const categories = await db
     .prepare(
-      'SELECT entry_category_id, entry_type, SUM(amount) as total FROM entries WHERE family_id = ? AND occurred_on >= ? AND occurred_on < ? GROUP BY entry_category_id, entry_type'
+      `SELECT entry_category_id, entry_type, SUM(amount) as total FROM entries WHERE family_id = ? AND occurred_on >= ? AND occurred_on < ?${recurringFilter} GROUP BY entry_category_id, entry_type`
     )
     .bind(familyId, from, to)
     .all()
 
   const series = await db
     .prepare(
-      'SELECT occurred_on as day, entry_type, SUM(amount) as total FROM entries WHERE family_id = ? AND occurred_on >= ? AND occurred_on < ? GROUP BY day, entry_type ORDER BY day'
+      `SELECT occurred_on as day, entry_type, SUM(amount) as total FROM entries WHERE family_id = ? AND occurred_on >= ? AND occurred_on < ?${recurringFilter} GROUP BY day, entry_type ORDER BY day`
     )
     .bind(familyId, from, to)
     .all()

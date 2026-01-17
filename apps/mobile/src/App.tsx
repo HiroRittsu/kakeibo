@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import dayjs from 'dayjs'
 import { useLiveQuery } from 'dexie-react-hooks'
 import './App.css'
@@ -19,6 +19,7 @@ type PageKey =
   | 'payment-settings'
 
 type PaymentType = 'cash' | 'bank' | 'emoney' | 'card'
+type HolidayAdjustment = 'none' | 'previous' | 'next'
 
 type SelectOption = {
   value: string
@@ -49,10 +50,16 @@ type DayCell = {
   totals: DayTotals
 }
 
+type HistoryItem = Entry & {
+  is_planned?: boolean
+}
+
 type ReportSummary = {
   income: number
   expense: number
 }
+
+type ReportEntry = Pick<Entry, 'entry_type' | 'amount' | 'entry_category_id' | 'occurred_at'>
 
 type CategoryTotal = {
   id: string
@@ -98,7 +105,7 @@ const PAGE_TITLES: Record<PageKey, string> = {
   'entry-input': '入力',
   'category-settings': 'カテゴリ設定',
   'recurring-settings': '定期的な収入/支出',
-  'other-settings': 'その他設定',
+  'other-settings': '支払い設定',
   'payment-settings': '支払い方法',
 }
 
@@ -134,6 +141,8 @@ const toTokyoDateString = (value: string) => {
   const tokyo = new Date(date.getTime() + 9 * 60 * 60 * 1000)
   return tokyo.toISOString().slice(0, 10)
 }
+
+const getEntryDateKey = (entry: Entry | HistoryItem) => entry.occurred_on ?? toTokyoDateString(entry.occurred_at)
 
 const buildEntryCreatePayload = (entry: Entry) => ({
   id: entry.id,
@@ -219,25 +228,10 @@ const IconSettings = () => (
   </IconBase>
 )
 
-const IconCoins = () => (
-  <IconBase>
-    <ellipse cx="12" cy="6" rx="6" ry="2" />
-    <path d="M6 6v6c0 1.1 2.7 2 6 2s6-.9 6-2V6" />
-    <path d="M6 12v6c0 1.1 2.7 2 6 2s6-.9 6-2v-6" />
-  </IconBase>
-)
-
 const IconHome = () => (
   <IconBase>
     <path d="M3 11l9-7 9 7" />
     <path d="M5 10v10h14V10" />
-  </IconBase>
-)
-
-const IconArrow = () => (
-  <IconBase>
-    <path d="M4 12h12" />
-    <path d="M12 6l6 6-6 6" />
   </IconBase>
 )
 
@@ -349,6 +343,97 @@ const buildCalendar = (month: dayjs.Dayjs, totals: Map<string, DayTotals>) => {
   return days
 }
 
+const normalizeHolidayAdjustment = (value?: string | null): HolidayAdjustment => {
+  if (value === 'previous' || value === 'next') return value
+  return 'none'
+}
+
+const adjustForWeekend = (date: dayjs.Dayjs, adjustment: HolidayAdjustment) => {
+  const day = date.day()
+  if (adjustment === 'none' || (day !== 0 && day !== 6)) return date
+  if (adjustment === 'previous') {
+    return day === 0 ? date.subtract(2, 'day') : date.subtract(1, 'day')
+  }
+  return day === 0 ? date.add(1, 'day') : date.add(2, 'day')
+}
+
+const getDueDay = (target: dayjs.Dayjs, ruleDay: number | null, fallback: dayjs.Dayjs) => {
+  const candidate = ruleDay ?? fallback.date()
+  return Math.min(candidate, target.daysInMonth())
+}
+
+type RecurringOccurrence = {
+  rule: RecurringRule
+  date: dayjs.Dayjs
+  isFuture: boolean
+}
+
+const buildRecurringOccurrences = (
+  rules: RecurringRule[],
+  range: 'week' | 'month' | 'year',
+  baseDate: dayjs.Dayjs
+) => {
+  const { start, end } = getRangeBounds(range, baseDate)
+  const rangeStart = start.startOf('day')
+  const rangeEnd = end.endOf('day')
+  const occurrences: RecurringOccurrence[] = []
+  const seen = new Set<string>()
+  const today = dayjs()
+
+  rules.forEach((rule) => {
+    if (!rule.is_active) return
+    const ruleStart = dayjs(rule.start_at)
+    const ruleEnd = rule.end_at ? dayjs(rule.end_at) : null
+    const adjustment = normalizeHolidayAdjustment(rule.holiday_adjustment)
+    const frequency = rule.frequency ?? 'monthly'
+
+    const addOccurrence = (base: dayjs.Dayjs) => {
+      if (base.isBefore(ruleStart, 'day')) return
+      if (ruleEnd && base.isAfter(ruleEnd, 'day')) return
+      const adjusted = adjustForWeekend(base, adjustment)
+      if (adjusted.isBefore(rangeStart, 'day') || adjusted.isAfter(rangeEnd, 'day')) return
+      const key = `${rule.id}:${adjusted.format('YYYY-MM-DD')}`
+      if (seen.has(key)) return
+      seen.add(key)
+      occurrences.push({ rule, date: adjusted, isFuture: adjusted.isAfter(today, 'day') })
+    }
+
+    if (frequency === 'weekly') {
+      const weekday =
+        rule.day_of_month !== null && rule.day_of_month >= 0 && rule.day_of_month <= 6
+          ? rule.day_of_month
+          : ruleStart.day()
+      const scanStart = rangeStart.subtract(2, 'day')
+      const scanEnd = rangeEnd.add(2, 'day')
+      for (let cursor = scanStart; cursor.isBefore(scanEnd) || cursor.isSame(scanEnd, 'day'); cursor = cursor.add(1, 'day')) {
+        if (cursor.day() !== weekday) continue
+        addOccurrence(cursor)
+      }
+      return
+    }
+
+    const monthStart = rangeStart.startOf('month').subtract(1, 'month')
+    const monthEnd = rangeEnd.startOf('month').add(1, 'month')
+    for (
+      let cursor = monthStart;
+      cursor.isBefore(monthEnd) || cursor.isSame(monthEnd, 'month');
+      cursor = cursor.add(1, 'month')
+    ) {
+      if (frequency === 'bimonthly') {
+        const diff = cursor.startOf('month').diff(ruleStart.startOf('month'), 'month')
+        if (diff < 0 || diff % 2 !== 0) continue
+      }
+      if (frequency === 'yearly' && cursor.month() !== ruleStart.month()) {
+        continue
+      }
+      const dueDay = getDueDay(cursor, rule.day_of_month, ruleStart)
+      addOccurrence(cursor.date(dueDay))
+    }
+  })
+
+  return occurrences.sort((a, b) => a.date.valueOf() - b.date.valueOf())
+}
+
 const getRangeBounds = (range: 'week' | 'month' | 'year', base = dayjs()) => {
   let start = base.startOf('month')
   let end = base.endOf('month')
@@ -365,8 +450,13 @@ const getRangeBounds = (range: 'week' | 'month' | 'year', base = dayjs()) => {
   return { start, end }
 }
 
-const computeReport = (entries: Entry[], categories: EntryCategory[], range: 'week' | 'month' | 'year') => {
-  const { start, end } = getRangeBounds(range)
+const computeReport = (
+  entries: ReportEntry[],
+  categories: EntryCategory[],
+  range: 'week' | 'month' | 'year',
+  baseDate = dayjs()
+) => {
+  const { start, end } = getRangeBounds(range, baseDate)
 
   const summaryTotals: ReportSummary = { income: 0, expense: 0 }
   const categoryMaps: Record<EntryType, Map<string, number>> = {
@@ -414,13 +504,17 @@ const computeReport = (entries: Entry[], categories: EntryCategory[], range: 'we
   return { summary: summaryTotals, categoryTotalsByType }
 }
 
-const buildReportSeries = (entries: Entry[], range: 'week' | 'month' | 'year', entryType: EntryType) => {
-  const now = dayjs()
+const buildReportSeries = (
+  entries: ReportEntry[],
+  range: 'week' | 'month' | 'year',
+  entryType: EntryType,
+  baseDate = dayjs()
+) => {
+  const now = baseDate
   const { start, end } = getRangeBounds(range, now)
   const unit = range === 'year' ? 'month' : 'day'
   const maxPoints = range === 'year' ? 12 : range === 'month' ? end.date() : 7
-  const elapsed = unit === 'month' ? now.diff(start, 'month') : now.diff(start, 'day')
-  const count = Math.min(maxPoints + 1, elapsed + 2)
+  const count = maxPoints
   const points = Array.from({ length: Math.max(1, count) }, (_, index) => {
     const date = start.add(index, unit)
     return {
@@ -496,6 +590,37 @@ const buildReportFromApi = (data: ReportResponse, categories: EntryCategory[]): 
   return { summary, categoryTotalsByType }
 }
 
+const mergeReportData = (base: ReportData, extra: ReportData): ReportData => {
+  const summary: ReportSummary = {
+    income: base.summary.income + extra.summary.income,
+    expense: base.summary.expense + extra.summary.expense,
+  }
+
+  const mergeByType = (type: EntryType) => {
+    const map = new Map<string, CategoryTotal>()
+    base.categoryTotalsByType[type].forEach((item) => {
+      map.set(item.id, { ...item })
+    })
+    extra.categoryTotalsByType[type].forEach((item) => {
+      const current = map.get(item.id)
+      if (current) {
+        current.total += item.total
+      } else {
+        map.set(item.id, { ...item })
+      }
+    })
+    return Array.from(map.values()).sort((a, b) => b.total - a.total)
+  }
+
+  return {
+    summary,
+    categoryTotalsByType: {
+      income: mergeByType('income'),
+      expense: mergeByType('expense'),
+    },
+  }
+}
+
 const estimateMonthlyAmount = (rule: RecurringRule) => {
   const frequency = rule.frequency || 'monthly'
   if (frequency === 'weekly') return rule.amount * 4
@@ -511,6 +636,23 @@ const groupByFrequency = (rule: RecurringRule) => {
   if (frequency === 'bimonthly') return '隔月/任意の月'
   if (frequency === 'yearly') return '年次'
   return '毎月'
+}
+
+const formatRecurringScheduleLabel = (rule: RecurringRule) => {
+  const frequency = rule.frequency || 'monthly'
+  const start = dayjs(rule.start_at)
+  if (frequency === 'weekly') {
+    const weekday =
+      rule.day_of_month !== null && rule.day_of_month >= 0 && rule.day_of_month <= 6
+        ? rule.day_of_month
+        : start.day()
+    const weekdayLabels = ['日', '月', '火', '水', '木', '金', '土']
+    return `毎週${weekdayLabels[weekday]}`
+  }
+  const dayValue = rule.day_of_month ?? start.date()
+  if (frequency === 'bimonthly') return `隔月${dayValue}日`
+  if (frequency === 'yearly') return `${start.month() + 1}月${dayValue}日`
+  return `毎月${dayValue}日`
 }
 
 const paymentMethodLabel = (methods: PaymentMethod[], id: string | null) => {
@@ -541,6 +683,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('home')
   const [page, setPage] = useState<PageKey>('main')
   const [returnPage, setReturnPage] = useState<PageKey>('main')
+  const [paymentReturnPage, setPaymentReturnPage] = useState<PageKey>('main')
   const [returnTab, setReturnTab] = useState<TabKey>('home')
   const [entrySeed, setEntrySeed] = useState<EntryInputSeed | null>(null)
   const [preferredEntryType, setPreferredEntryType] = useState<EntryType>('expense')
@@ -622,6 +765,18 @@ function App() {
       })
     }
 
+    void syncOutbox()
+  }
+
+  const handleDeleteEntry = async (entryId: string) => {
+    await db.entries.delete(entryId)
+    await enqueueOutbox({
+      id: crypto.randomUUID(),
+      method: 'DELETE',
+      endpoint: `/entries/${entryId}`,
+      payload: null,
+      created_at: new Date().toISOString(),
+    })
     void syncOutbox()
   }
 
@@ -716,33 +871,7 @@ function App() {
     void syncOutbox()
   }
 
-  const handleAddRecurringRule = async (rule: {
-    entryType: EntryType
-    amount: number
-    entryCategoryId: string | null
-    paymentMethodId: string | null
-    memo: string | null
-    frequency: string
-    dayOfMonth: number | null
-  }) => {
-    const now = new Date().toISOString()
-    const recurringRule: RecurringRule = {
-      id: crypto.randomUUID(),
-      family_id: getFamilyId(),
-      entry_type: rule.entryType,
-      amount: rule.amount,
-      entry_category_id: rule.entryCategoryId,
-      payment_method_id: rule.paymentMethodId,
-      memo: rule.memo,
-      frequency: rule.frequency,
-      day_of_month: rule.dayOfMonth,
-      start_at: now,
-      end_at: null,
-      is_active: true,
-      created_at: now,
-      updated_at: now,
-    }
-
+  const handleSaveRecurringRule = async (recurringRule: RecurringRule) => {
     await db.recurringRules.put(recurringRule)
     await enqueueOutbox({
       id: crypto.randomUUID(),
@@ -760,11 +889,58 @@ function App() {
         start_at: recurringRule.start_at,
         end_at: recurringRule.end_at,
         is_active: recurringRule.is_active,
+        holiday_adjustment: recurringRule.holiday_adjustment ?? 'none',
       },
-      created_at: now,
+      created_at: new Date().toISOString(),
     })
 
     void syncOutbox()
+  }
+
+  const handleDeleteRecurringRule = async (rule: RecurringRule) => {
+    await db.recurringRules.delete(rule.id)
+    await enqueueOutbox({
+      id: crypto.randomUUID(),
+      method: 'DELETE',
+      endpoint: `/recurring-rules/${rule.id}`,
+      payload: null,
+      created_at: new Date().toISOString(),
+    })
+
+    void syncOutbox()
+  }
+
+  const handleAddRecurringRule = async (rule: {
+    entryType: EntryType
+    amount: number
+    entryCategoryId: string | null
+    paymentMethodId: string | null
+    memo: string | null
+    frequency: string
+    dayOfMonth: number | null
+    holidayAdjustment: HolidayAdjustment
+    startAt: string
+  }) => {
+    const now = new Date().toISOString()
+    const recurringRule: RecurringRule = {
+      id: crypto.randomUUID(),
+      family_id: getFamilyId(),
+      entry_type: rule.entryType,
+      amount: rule.amount,
+      entry_category_id: rule.entryCategoryId,
+      payment_method_id: rule.paymentMethodId,
+      memo: rule.memo,
+      frequency: rule.frequency,
+      day_of_month: rule.dayOfMonth,
+      holiday_adjustment: rule.holidayAdjustment,
+      start_at: rule.startAt,
+      end_at: null,
+      is_active: true,
+      created_at: now,
+      updated_at: now,
+    }
+
+    await handleSaveRecurringRule(recurringRule)
   }
 
   const handleOpenPage = (next: PageKey) => {
@@ -775,7 +951,7 @@ function App() {
 
   const handleOpenPayment = (type: PaymentType) => {
     setPaymentType(type)
-    setReturnPage(page === 'other-settings' ? 'other-settings' : page === 'balance' ? 'balance' : 'main')
+    setPaymentReturnPage(page === 'other-settings' ? 'other-settings' : page === 'balance' ? 'balance' : 'main')
     setPage('payment-settings')
     setMenuOpen(false)
   }
@@ -790,6 +966,10 @@ function App() {
   }
 
   const handleBack = () => {
+    if (page === 'payment-settings') {
+      setPage(paymentReturnPage)
+      return
+    }
     if (page === 'entry-input') {
       setEntrySeed(null)
       setPage(returnPage)
@@ -898,6 +1078,10 @@ function App() {
             entries={entries ?? []}
             categoryMap={categoryMap}
             paymentMap={paymentMap}
+            recurringRules={recurringRules ?? []}
+            defaultEntryType={preferredEntryType}
+            defaultPaymentMethodId={paymentMethods?.[0]?.id ?? null}
+            onOpenEntryInput={handleOpenEntryInput}
             onEdit={(entry) =>
               handleOpenEntryInput(
                 {
@@ -918,7 +1102,10 @@ function App() {
           />
         )}
         {page === 'main' && activeTab === 'reports' && (
-          <ReportsTab entries={entries ?? []} categories={entryCategories ?? []} />
+          <ReportsTab
+            entries={entries ?? []}
+            categories={entryCategories ?? []}
+          />
         )}
         {page === 'balance' && (
           <BalancePage
@@ -936,6 +1123,13 @@ function App() {
               void handleSaveEntry(payload)
               handleBack()
             }}
+            onDelete={(entryId) => {
+              void handleDeleteEntry(entryId)
+              handleBack()
+            }}
+            onEntryTypeChange={(nextType) => {
+              setEntrySeed((prev) => (prev ? { ...prev, entryType: nextType } : prev))
+            }}
           />
         )}
         {page === 'category-settings' && (
@@ -952,6 +1146,8 @@ function App() {
             categories={entryCategories ?? []}
             paymentMethods={paymentMethods ?? []}
             onAdd={handleAddRecurringRule}
+            onSave={handleSaveRecurringRule}
+            onDelete={handleDeleteRecurringRule}
           />
         )}
         {page === 'other-settings' && (
@@ -973,9 +1169,12 @@ function App() {
         </div>
         <div className="menu-list">
           <MenuItem icon={<IconFolder />} label="カテゴリ設定" onClick={() => handleOpenPage('category-settings')} />
-          <MenuItem icon={<IconCoins />} label="予算設定" disabled />
-          <MenuItem icon={<IconArrow />} label="定期的な収入/支出" onClick={() => handleOpenPage('recurring-settings')} />
-          <MenuItem icon={<IconSettings />} label="その他設定" onClick={() => handleOpenPage('other-settings')} />
+          <MenuItem
+            icon={renderMaterialIcon('autorenew')}
+            label="定期的な収入/支出"
+            onClick={() => handleOpenPage('recurring-settings')}
+          />
+          <MenuItem icon={<IconSettings />} label="支払い設定" onClick={() => handleOpenPage('other-settings')} />
         </div>
       </div>
 
@@ -1045,6 +1244,7 @@ const HomeTab = ({
 
   const totalForRatio = monthSummary.income + monthSummary.expense
   const ratio = totalForRatio > 0 ? monthSummary.expense / totalForRatio : 0
+  const isNegative = monthSummary.balance < 0
 
   return (
     <section className="card">
@@ -1052,8 +1252,8 @@ const HomeTab = ({
         <span>収支</span>
         <strong>¥{formatAmount(monthSummary.balance)}</strong>
       </div>
-      <div className="summary-progress">
-        <span style={{ width: `${Math.min(100, ratio * 100)}%` }} />
+      <div className={`summary-progress ${isNegative ? 'negative' : ''}`}>
+        <span style={{ width: `${isNegative ? 100 : Math.min(100, ratio * 100)}%` }} />
       </div>
 
       <div className="pill-toggle">
@@ -1128,9 +1328,18 @@ type EntryInputPageProps = {
   categories: EntryCategory[]
   paymentMethods: PaymentMethod[]
   onSave: (payload: EntryInputSeed) => void
+  onDelete?: (entryId: string) => void
+  onEntryTypeChange?: (entryType: EntryType) => void
 }
 
-const EntryInputPage = ({ seed, categories, paymentMethods, onSave }: EntryInputPageProps) => {
+const EntryInputPage = ({
+  seed,
+  categories,
+  paymentMethods,
+  onSave,
+  onDelete,
+  onEntryTypeChange,
+}: EntryInputPageProps) => {
   const [entryType, setEntryType] = useState<EntryType>(seed.entryType)
   const [entryCategoryId, setEntryCategoryId] = useState(seed.entryCategoryId ?? '')
   const [paymentMethodId, setPaymentMethodId] = useState(seed.paymentMethodId ?? '')
@@ -1157,7 +1366,7 @@ const EntryInputPage = ({ seed, categories, paymentMethods, onSave }: EntryInput
     setDisplayValue(seed.amount ? String(seed.amount) : '0')
     setAccumulator(null)
     setPendingOperator(null)
-    setFreshInput(true)
+    setFreshInput(!seed.amount)
     setOperationUsed(false)
     setAwaitingSubmit(false)
   }, [seed])
@@ -1167,8 +1376,12 @@ const EntryInputPage = ({ seed, categories, paymentMethods, onSave }: EntryInput
   }, [categories, entryType])
 
   useEffect(() => {
-    if (entryCategoryId && !visibleCategories.some((category) => category.id === entryCategoryId)) {
-      setEntryCategoryId('')
+    if (!visibleCategories.length) {
+      if (entryCategoryId) setEntryCategoryId('')
+      return
+    }
+    if (!entryCategoryId || !visibleCategories.some((category) => category.id === entryCategoryId)) {
+      setEntryCategoryId(visibleCategories[0].id)
     }
   }, [entryCategoryId, visibleCategories])
 
@@ -1234,7 +1447,9 @@ const EntryInputPage = ({ seed, categories, paymentMethods, onSave }: EntryInput
   }
 
   const handleBackspace = () => {
-    if (freshInput) return
+    if (freshInput) {
+      setFreshInput(false)
+    }
     setDisplayValue((prev) => {
       if (prev.length <= 1) return '0'
       return prev.slice(0, -1)
@@ -1291,6 +1506,13 @@ const EntryInputPage = ({ seed, categories, paymentMethods, onSave }: EntryInput
   const paymentLabel =
     paymentMethods.find((method) => method.id === paymentMethodId)?.name ?? '支払い方法'
 
+  const handleEntryTypeChange = (nextType: EntryType) => {
+    setEntryType(nextType)
+    const nextCategories = categories.filter((category) => category.type === nextType)
+    setEntryCategoryId(nextCategories[0]?.id ?? '')
+    onEntryTypeChange?.(nextType)
+  }
+
   return (
     <section className="card entry-input">
       <div className="entry-meta">
@@ -1316,14 +1538,32 @@ const EntryInputPage = ({ seed, categories, paymentMethods, onSave }: EntryInput
         >
           {selectedCategory ? getCategoryIcon(selectedCategory.icon_key) ?? selectedCategory.name.slice(0, 1) : '?'}
         </span>
-        <select value={entryCategoryId} onChange={(event) => setEntryCategoryId(event.target.value)}>
-          <option value="">カテゴリ</option>
-          {visibleCategories.map((category) => (
-            <option key={category.id} value={category.id}>
-              {category.name}
-            </option>
-          ))}
-        </select>
+        <div className="entry-row-controls">
+          <select value={entryCategoryId} onChange={(event) => setEntryCategoryId(event.target.value)}>
+            <option value="">カテゴリ</option>
+            {visibleCategories.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+          <div className="pill-toggle entry-type-toggle">
+            <button
+              type="button"
+              className={entryType === 'income' ? 'active' : ''}
+              onClick={() => handleEntryTypeChange('income')}
+            >
+              収入
+            </button>
+            <button
+              type="button"
+              className={entryType === 'expense' ? 'active' : ''}
+              onClick={() => handleEntryTypeChange('expense')}
+            >
+              支出
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="entry-fields">
@@ -1390,8 +1630,15 @@ const EntryInputPage = ({ seed, categories, paymentMethods, onSave }: EntryInput
           {paymentLabel}
         </button>
         {isEditing && (
-          <button type="button" className="entry-clear" onClick={handleClear}>
-            金額削除
+          <button
+            type="button"
+            className="entry-delete"
+            aria-label="削除"
+            onClick={() => {
+              if (seed.id) onDelete?.(seed.id)
+            }}
+          >
+            {renderMaterialIcon('delete')}
           </button>
         )}
         <button
@@ -1410,18 +1657,62 @@ type HistoryTabProps = {
   entries: Entry[]
   categoryMap: Map<string, EntryCategory>
   paymentMap: Map<string, PaymentMethod>
+  recurringRules: RecurringRule[]
   onEdit: (entry: Entry) => void
+  onOpenEntryInput: (seed: EntryInputSeed, tab?: TabKey) => void
+  defaultEntryType: EntryType
+  defaultPaymentMethodId: string | null
 }
 
-const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProps) => {
-  const [view, setView] = useState<'list' | 'calendar' | 'diary'>('list')
+const HistoryTab = ({
+  entries,
+  categoryMap,
+  paymentMap,
+  recurringRules,
+  onEdit,
+  onOpenEntryInput,
+  defaultEntryType,
+  defaultPaymentMethodId,
+}: HistoryTabProps) => {
+  const [view, setView] = useState<'list' | 'calendar'>('calendar')
   const [currentMonth, setCurrentMonth] = useState(dayjs())
   const [selectedDate, setSelectedDate] = useState(() => dayjs().format('YYYY-MM-DD'))
   const weekdayLabels = ['日', '月', '火', '水', '木', '金', '土']
 
   const monthEntries = useMemo(() => {
-    return entries.filter((entry) => dayjs(entry.occurred_at).isSame(currentMonth, 'month'))
+    return entries.filter((entry) => dayjs(getEntryDateKey(entry)).isSame(currentMonth, 'month'))
   }, [entries, currentMonth])
+
+  const plannedItems = useMemo<HistoryItem[]>(() => {
+    if (!recurringRules.length) return []
+    const { start, end } = getRangeBounds('month', currentMonth)
+    const existingKeys = new Set(
+      entries
+        .filter((entry) => entry.recurring_rule_id)
+        .map((entry) => `${entry.recurring_rule_id}:${entry.occurred_on ?? toTokyoDateString(entry.occurred_at)}`)
+    )
+    return buildRecurringOccurrences(recurringRules, 'month', currentMonth)
+      .filter((occurrence) => {
+        if (occurrence.date.isBefore(start) || occurrence.date.isAfter(end)) return false
+        const key = `${occurrence.rule.id}:${occurrence.date.format('YYYY-MM-DD')}`
+        return !existingKeys.has(key)
+      })
+      .map((occurrence) => ({
+        id: `planned-${occurrence.rule.id}-${occurrence.date.format('YYYY-MM-DD')}`,
+        family_id: occurrence.rule.family_id,
+        entry_type: occurrence.rule.entry_type,
+        amount: occurrence.rule.amount,
+        entry_category_id: occurrence.rule.entry_category_id,
+        payment_method_id: occurrence.rule.payment_method_id,
+        memo: occurrence.rule.memo,
+        occurred_at: occurrence.date.toISOString(),
+        occurred_on: occurrence.date.format('YYYY-MM-DD'),
+        recurring_rule_id: occurrence.rule.id,
+        created_at: occurrence.date.toISOString(),
+        updated_at: occurrence.date.toISOString(),
+        is_planned: true,
+      }))
+  }, [recurringRules, currentMonth, entries])
 
   useEffect(() => {
     const base = dayjs().isSame(currentMonth, 'month') ? dayjs() : currentMonth.startOf('month')
@@ -1434,7 +1725,7 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
     let expense = 0
 
     monthEntries.forEach((entry) => {
-      const dateKey = dayjs(entry.occurred_at).format('YYYY-MM-DD')
+      const dateKey = getEntryDateKey(entry)
       const current = byDay.get(dateKey) ?? { income: 0, expense: 0 }
       if (entry.entry_type === 'income') {
         current.income += entry.amount
@@ -1457,13 +1748,14 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
   const groupedEntries = useMemo(() => {
     const map = new Map<
       string,
-      { date: dayjs.Dayjs; entries: Entry[]; totals: { income: number; expense: number } }
+      { date: dayjs.Dayjs; entries: HistoryItem[]; planned: HistoryItem[]; totals: { income: number; expense: number } }
     >()
     monthEntries.forEach((entry) => {
-      const key = dayjs(entry.occurred_at).format('YYYY-MM-DD')
+      const key = getEntryDateKey(entry)
       const current = map.get(key) ?? {
-        date: dayjs(entry.occurred_at),
+        date: dayjs(getEntryDateKey(entry)),
         entries: [],
+        planned: [],
         totals: { income: 0, expense: 0 },
       }
       current.entries.push(entry)
@@ -1474,25 +1766,70 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
       }
       map.set(key, current)
     })
+    plannedItems.forEach((entry) => {
+      const key = getEntryDateKey(entry)
+      const current = map.get(key) ?? {
+        date: dayjs(getEntryDateKey(entry)),
+        entries: [],
+        planned: [],
+        totals: { income: 0, expense: 0 },
+      }
+      current.planned.push(entry)
+      map.set(key, current)
+    })
     return Array.from(map.values())
       .map((group) => ({
         ...group,
         entries: group.entries.sort(
           (a, b) => dayjs(a.occurred_at).valueOf() - dayjs(b.occurred_at).valueOf()
         ),
+        planned: group.planned.sort(
+          (a, b) => dayjs(a.occurred_at).valueOf() - dayjs(b.occurred_at).valueOf()
+        ),
       }))
       .sort((a, b) => b.date.valueOf() - a.date.valueOf())
-  }, [monthEntries])
+  }, [monthEntries, plannedItems])
 
   const selectedEntries = useMemo(() => {
-    return monthEntries
-      .filter((entry) => dayjs(entry.occurred_at).format('YYYY-MM-DD') === selectedDate)
-      .sort((a, b) => dayjs(a.occurred_at).valueOf() - dayjs(b.occurred_at).valueOf())
-  }, [monthEntries, selectedDate])
+    const actual = monthEntries.filter(
+      (entry) => getEntryDateKey(entry) === selectedDate
+    )
+    const planned = plannedItems.filter(
+      (entry) => getEntryDateKey(entry) === selectedDate
+    )
+    return [...actual, ...planned].sort(
+      (a, b) => dayjs(a.occurred_at).valueOf() - dayjs(b.occurred_at).valueOf()
+    )
+  }, [monthEntries, plannedItems, selectedDate])
+
+  const plannedTotals = useMemo(() => {
+    const map = new Map<string, DayTotals>()
+    plannedItems.forEach((entry) => {
+      const key = getEntryDateKey(entry)
+      const current = map.get(key) ?? { income: 0, expense: 0 }
+      if (entry.entry_type === 'income') {
+        current.income += entry.amount
+      } else {
+        current.expense += entry.amount
+      }
+      map.set(key, current)
+    })
+    return map
+  }, [plannedItems])
+
+  const recurringDays = useMemo(() => {
+    const set = new Set<string>()
+    monthEntries.forEach((entry) => {
+      if (!entry.recurring_rule_id) return
+      set.add(getEntryDateKey(entry))
+    })
+    return set
+  }, [monthEntries])
 
   const selectedTotals = useMemo(() => {
     return selectedEntries.reduce(
       (sum, entry) => {
+        if (entry.is_planned) return sum
         if (entry.entry_type === 'income') {
           sum.income += entry.amount
         } else {
@@ -1504,7 +1841,7 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
     )
   }, [selectedEntries])
 
-  const renderEntryButton = (entry: Entry) => {
+  const renderEntryButton = (entry: HistoryItem) => {
     const category = entry.entry_category_id ? categoryMap.get(entry.entry_category_id) : null
     const method = entry.payment_method_id ? paymentMap.get(entry.payment_method_id) : null
     const memoValue = entry.memo?.trim()
@@ -1512,24 +1849,37 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
     const categoryColor = category?.color ?? '#d9554c'
     const categoryIcon = getCategoryIcon(category?.icon_key)
     const categoryFallback = category?.name?.slice(0, 1) ?? '?'
+    const isPlanned = Boolean(entry.is_planned)
+    const isRecurring = Boolean(entry.recurring_rule_id)
+    const amountPrefix = isPlanned ? (entry.entry_type === 'income' ? '+' : '-') : ''
 
     return (
-      <button key={entry.id} type="button" className="entry-button" onClick={() => onEdit(entry)}>
+      <button
+        key={entry.id}
+        type="button"
+        className={`entry-button ${isPlanned ? 'planned' : ''}`}
+        onClick={isPlanned ? undefined : () => onEdit(entry)}
+        disabled={isPlanned}
+      >
         <div className="entry-row-main">
           <span className="entry-category-icon" style={{ background: categoryColor }}>
             {categoryIcon ?? <span className="category-fallback">{categoryFallback}</span>}
+            <span className={`entry-payment-overlay ${paymentClass}`}>{getPaymentIcon(method)}</span>
           </span>
           <div className="entry-info">
-            <div className="entry-title-row">
-              <span className={`badge ${entry.entry_type}`}>{entry.entry_type === 'income' ? '収入' : '支出'}</span>
-              <strong>¥{formatAmount(entry.amount)}</strong>
+            <div className="entry-top-row">
+              <strong className="entry-name">{category?.name ?? '未分類'}</strong>
+              {memoValue && <span className="entry-memo">{memoValue}</span>}
+              <div className="entry-badges">
+                <span className={`badge ${entry.entry_type}`}>{entry.entry_type === 'income' ? '収入' : '支出'}</span>
+                {isRecurring && <span className="badge recurring">定期</span>}
+                {isPlanned && <span className="badge planned">予定</span>}
+              </div>
             </div>
-            <div className="entry-details">
-              <span>{category?.name ?? '未分類'}</span>
-              {memoValue && <span>{memoValue}</span>}
+            <div className="entry-amount-row">
+              <strong>{amountPrefix}¥{formatAmount(entry.amount)}</strong>
             </div>
           </div>
-          <span className={`entry-payment-icon ${paymentClass}`}>{getPaymentIcon(method)}</span>
         </div>
       </button>
     )
@@ -1537,6 +1887,22 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
 
   const totalForRatio = monthTotals.income + monthTotals.expense
   const ratio = totalForRatio > 0 ? monthTotals.expense / totalForRatio : 0
+
+  const handleAddFromCalendar = () => {
+    const now = dayjs()
+    const occurredAt = dayjs(`${selectedDate}T${now.format('HH:mm')}`).toISOString()
+    onOpenEntryInput(
+      {
+        entryType: defaultEntryType,
+        amount: 0,
+        entryCategoryId: null,
+        paymentMethodId: defaultPaymentMethodId,
+        memo: null,
+        occurredAt,
+      },
+      'history'
+    )
+  }
 
   return (
     <section className="card">
@@ -1549,7 +1915,7 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
           ›
         </button>
       </div>
-      <div className="pill-toggle small">
+      <div className="pill-toggle">
         <button type="button" className={view === 'list' ? 'active' : ''} onClick={() => setView('list')}>
           リスト
         </button>
@@ -1559,9 +1925,6 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
           onClick={() => setView('calendar')}
         >
           カレンダ
-        </button>
-        <button type="button" className={view === 'diary' ? 'active' : ''} onClick={() => setView('diary')}>
-          日記
         </button>
       </div>
 
@@ -1585,8 +1948,11 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
                   <span className="badge expense">支出 ¥{formatAmount(group.totals.expense)}</span>
                 </div>
               </div>
-              <div className="entry-group-list">
-                {group.entries.map((entry) => renderEntryButton(entry))}
+              <div className="entry-group-card">
+                <div className="entry-group-list">
+                  {group.entries.map((entry) => renderEntryButton(entry))}
+                  {group.planned.map((entry) => renderEntryButton(entry))}
+                </div>
               </div>
             </li>
           ))}
@@ -1606,6 +1972,8 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
               const weekendClass = day === 0 ? 'sunday' : day === 6 ? 'saturday' : ''
               const cellKey = cell.date.format('YYYY-MM-DD')
               const isSelected = cellKey === selectedDate
+              const planned = plannedTotals.get(cellKey) ?? { income: 0, expense: 0 }
+              const hasRecurring = recurringDays.has(cellKey)
               return (
                 <button
                   key={cell.date.toISOString()}
@@ -1624,6 +1992,12 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
                   )}
                   {cell.totals.income > 0 && (
                     <span className="calendar-amount income">{formatAmount(cell.totals.income)}</span>
+                  )}
+                  {planned.expense > 0 && (
+                    <span className="calendar-amount expense planned">-{formatAmount(planned.expense)}</span>
+                  )}
+                  {planned.income > 0 && (
+                    <span className="calendar-amount income planned">+{formatAmount(planned.income)}</span>
                   )}
                 </button>
               )
@@ -1645,10 +2019,11 @@ const HistoryTab = ({ entries, categoryMap, paymentMap, onEdit }: HistoryTabProp
             {selectedEntries.length === 0 && <p className="muted">この日の明細はありません</p>}
             {selectedEntries.map((entry) => renderEntryButton(entry))}
           </div>
+          <button type="button" className="floating-button" onClick={handleAddFromCalendar}>
+            +
+          </button>
         </div>
       )}
-
-      {view === 'diary' && <p className="muted">日記表示は準備中です。</p>}
     </section>
   )
 }
@@ -1662,12 +2037,25 @@ const ReportsTab = ({ entries, categories }: ReportsTabProps) => {
   const [range, setRange] = useState<'week' | 'month' | 'year'>('month')
   const [reportType, setReportType] = useState<EntryType>('expense')
   const [chartType, setChartType] = useState<'donut' | 'bar'>('donut')
+  const [reportOffset, setReportOffset] = useState(0)
+  const barScrollRef = useRef<HTMLDivElement | null>(null)
 
-  const localReport = useMemo(() => computeReport(entries, categories, range), [entries, categories, range])
+  useEffect(() => {
+    setReportOffset(0)
+  }, [range])
+
+  const rangeUnit = range === 'week' ? 'week' : range === 'year' ? 'year' : 'month'
+  const baseDate = useMemo(() => dayjs().add(reportOffset, rangeUnit), [reportOffset, rangeUnit])
+
+  const reportEntries = useMemo<ReportEntry[]>(() => entries, [entries])
+  const localReport = useMemo(
+    () => computeReport(reportEntries, categories, range, baseDate),
+    [reportEntries, categories, range, baseDate]
+  )
   const [report, setReport] = useState<ReportData>(localReport)
 
   const rangeInfo = useMemo(() => {
-    const { start, end } = getRangeBounds(range)
+    const { start, end } = getRangeBounds(range, baseDate)
     const label =
       range === 'week'
         ? `${start.format('YYYY/M/D')} - ${end.format('M/D')}`
@@ -1675,8 +2063,10 @@ const ReportsTab = ({ entries, categories }: ReportsTabProps) => {
           ? start.format('YYYY年 M月')
           : start.format('YYYY年')
     const detail = `${start.format('YYYY/M/D')} 〜 ${end.format('YYYY/M/D')}`
-    return { label, detail }
-  }, [range])
+    const apiFrom = start.format('YYYY-MM-DD')
+    const apiTo = end.add(1, 'day').format('YYYY-MM-DD')
+    return { label, detail, apiFrom, apiTo }
+  }, [range, baseDate])
 
   useEffect(() => {
     setReport(localReport)
@@ -1687,7 +2077,7 @@ const ReportsTab = ({ entries, categories }: ReportsTabProps) => {
 
     const load = async () => {
       try {
-        const response = await apiFetch(`/reports?range=${range}`)
+        const response = await apiFetch(`/reports?range=${range}&from=${rangeInfo.apiFrom}&to=${rangeInfo.apiTo}`)
         if (!response.ok) return
         const data = (await response.json()) as ReportResponse
         if (!active) return
@@ -1701,12 +2091,26 @@ const ReportsTab = ({ entries, categories }: ReportsTabProps) => {
     return () => {
       active = false
     }
-  }, [range, categories])
+  }, [range, categories, rangeInfo])
 
   const activeTotal = report.summary[reportType]
   const categoryTotals = report.categoryTotalsByType[reportType]
   const donutSegments = categoryTotals.filter((item) => item.total > 0)
-  const series = useMemo(() => buildReportSeries(entries, range, reportType), [entries, range, reportType])
+  const series = useMemo(
+    () => buildReportSeries(reportEntries, range, reportType, baseDate),
+    [reportEntries, range, reportType, baseDate]
+  )
+  useEffect(() => {
+    if (chartType !== 'bar') return
+    if (range === 'week') return
+    const container = barScrollRef.current
+    if (!container) return
+    const focusKey = range === 'year' ? baseDate.format('YYYY-MM') : baseDate.format('YYYY-MM-DD')
+    const target = container.querySelector(`[data-key="${focusKey}"]`) as HTMLElement | null
+    if (!target) return
+    const left = target.offsetLeft - container.clientWidth / 2 + target.clientWidth / 2
+    container.scrollTo({ left: Math.max(0, left), behavior: 'smooth' })
+  }, [chartType, range, baseDate, series])
 
   const donutGradient = useMemo(() => {
     if (!donutSegments.length) return 'conic-gradient(#e0e0e0 0 100%)'
@@ -1727,7 +2131,13 @@ const ReportsTab = ({ entries, categories }: ReportsTabProps) => {
   return (
     <section className="card">
       <div className="month-header">
+        <button className="icon-button" onClick={() => setReportOffset((prev) => prev - 1)}>
+          ‹
+        </button>
         <h2>{rangeInfo.label}</h2>
+        <button className="icon-button" onClick={() => setReportOffset((prev) => prev + 1)}>
+          ›
+        </button>
       </div>
       <div className="report-range">{rangeInfo.detail}</div>
       <div className="pill-toggle small">
@@ -1764,16 +2174,21 @@ const ReportsTab = ({ entries, categories }: ReportsTabProps) => {
           </div>
         </div>
       ) : (
-        <div className="bar-scroll">
-          <div className="bar-chart">
+        <div className="bar-scroll" ref={barScrollRef}>
+          <div className={`bar-chart ${series.length <= 7 ? 'bar-chart-full' : ''}`}>
             {(() => {
               const maxValue = Math.max(...series.map((item) => item.total), 1)
+              const maxBarHeight = 80
               return series.map((point) => {
-                const height = Math.round((point.total / maxValue) * 100)
+                const height = Math.round((point.total / maxValue) * maxBarHeight)
+                const barHeight = point.total > 0 ? Math.max(4, height) : 4
                 return (
-                  <div key={point.key} className="bar-item">
-                    <div className="bar-value" style={{ height: `${height}%` }} />
-                    <span className="bar-label">{point.label}</span>
+                  <div key={point.key} className="bar-item" data-key={point.key}>
+                    <span className="bar-amount">¥{formatAmount(point.total)}</span>
+                    <div className="bar-stack">
+                      <div className="bar-value" style={{ height: `${barHeight}px` }} />
+                      <span className="bar-label">{point.label}</span>
+                    </div>
                   </div>
                 )
               })
@@ -1827,6 +2242,7 @@ const ReportsTab = ({ entries, categories }: ReportsTabProps) => {
           )}
         </ul>
       </div>
+
     </section>
   )
 }
@@ -2043,7 +2459,7 @@ const CategorySettingsPage = ({ categories, onAdd, onSave, onDelete }: CategoryS
         </button>
       </div>
 
-      <ul className="category-list">
+      <ul className="category-list scrollable">
         {filtered.map((category, index) => (
           <li key={category.id} className="category-row">
             <span
@@ -2123,7 +2539,7 @@ const CategorySettingsPage = ({ categories, onAdd, onSave, onDelete }: CategoryS
 
       {editingCategory && (
         <div className="sheet">
-          <form className="sheet-card" onSubmit={handleUpdate}>
+          <form className="sheet-card scrollable" onSubmit={handleUpdate}>
             <h3>カテゴリ編集</h3>
             <input
               type="text"
@@ -2186,20 +2602,31 @@ type RecurringSettingsPageProps = {
     memo: string | null
     frequency: string
     dayOfMonth: number | null
+    holidayAdjustment: HolidayAdjustment
+    startAt: string
   }) => void
+  onSave: (rule: RecurringRule) => void
+  onDelete: (rule: RecurringRule) => void
 }
 
-const RecurringSettingsPage = ({ rules, categories, paymentMethods, onAdd }: RecurringSettingsPageProps) => {
+const RecurringSettingsPage = ({ rules, categories, paymentMethods, onAdd, onSave, onDelete }: RecurringSettingsPageProps) => {
   const [entryType, setEntryType] = useState<EntryType>('expense')
   const [showForm, setShowForm] = useState(false)
+  const [editingRule, setEditingRule] = useState<RecurringRule | null>(null)
   const [amount, setAmount] = useState('')
   const [entryCategoryId, setEntryCategoryId] = useState('')
   const [paymentMethodId, setPaymentMethodId] = useState('')
   const [memo, setMemo] = useState('')
   const [frequency, setFrequency] = useState('monthly')
   const [dayOfMonth, setDayOfMonth] = useState('8')
+  const [yearlyMonth, setYearlyMonth] = useState(String(dayjs().month() + 1))
+  const [holidayAdjustment, setHolidayAdjustment] = useState<HolidayAdjustment>('none')
 
   const filteredRules = useMemo(() => rules.filter((rule) => rule.entry_type === entryType), [rules, entryType])
+  const formCategories = useMemo(
+    () => categories.filter((category) => category.type === entryType),
+    [categories, entryType]
+  )
 
   const totals = useMemo(() => {
     const monthly = filteredRules.reduce((sum, rule) => sum + estimateMonthlyAmount(rule), 0)
@@ -2216,22 +2643,119 @@ const RecurringSettingsPage = ({ rules, categories, paymentMethods, onAdd }: Rec
     return Array.from(map.entries())
   }, [filteredRules])
 
+  const resetForm = () => {
+    setEditingRule(null)
+    setAmount('')
+    setEntryCategoryId('')
+    setPaymentMethodId('')
+    setMemo('')
+    setFrequency('monthly')
+    setDayOfMonth('8')
+    setYearlyMonth(String(dayjs().month() + 1))
+    setHolidayAdjustment('none')
+    setShowForm(false)
+  }
+
+  const openCreate = () => {
+    setEditingRule(null)
+    setAmount('')
+    setEntryCategoryId('')
+    setPaymentMethodId('')
+    setMemo('')
+    setFrequency('monthly')
+    setDayOfMonth('8')
+    setYearlyMonth(String(dayjs().month() + 1))
+    setHolidayAdjustment('none')
+    setShowForm(true)
+  }
+
+  const openEdit = (rule: RecurringRule) => {
+    const ruleStart = dayjs(rule.start_at)
+    setEditingRule(rule)
+    setEntryType(rule.entry_type)
+    setAmount(String(rule.amount))
+    setEntryCategoryId(rule.entry_category_id ?? '')
+    setPaymentMethodId(rule.payment_method_id ?? '')
+    setMemo(rule.memo ?? '')
+    setFrequency(rule.frequency ?? 'monthly')
+    setYearlyMonth(String(ruleStart.month() + 1))
+    if ((rule.frequency ?? 'monthly') === 'weekly') {
+      const weekday = rule.day_of_month ?? ruleStart.day()
+      setDayOfMonth(String(weekday))
+    } else {
+      const dateValue = rule.day_of_month ?? ruleStart.date()
+      setDayOfMonth(String(dateValue))
+    }
+    setHolidayAdjustment(normalizeHolidayAdjustment(rule.holiday_adjustment))
+    setShowForm(true)
+  }
+
+  useEffect(() => {
+    if (frequency === 'weekly') {
+      const value = Number(dayOfMonth)
+      if (!Number.isFinite(value) || value < 0 || value > 6) {
+        setDayOfMonth(String(dayjs().day()))
+      }
+      return
+    }
+    const value = Number(dayOfMonth)
+    if (!Number.isFinite(value) || value < 1 || value > 31) {
+      setDayOfMonth('1')
+    }
+  }, [frequency, dayOfMonth])
+
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()
     const value = Number(amount)
     if (!Number.isFinite(value) || value <= 0) return
-    onAdd({
-      entryType,
-      amount: Math.round(value),
-      entryCategoryId: entryCategoryId || null,
-      paymentMethodId: paymentMethodId || null,
-      memo: memo.trim() ? memo.trim() : null,
-      frequency,
-      dayOfMonth: dayOfMonth ? Number(dayOfMonth) : null,
-    })
-    setAmount('')
-    setMemo('')
-    setShowForm(false)
+    const parsedDayOfMonth = dayOfMonth === '' ? null : Number(dayOfMonth)
+    const baseStart = dayjs(editingRule?.start_at ?? new Date().toISOString())
+    const parsedMonth = Number(yearlyMonth)
+    const monthIndex =
+      Number.isFinite(parsedMonth) && parsedMonth >= 1 && parsedMonth <= 12 ? parsedMonth - 1 : baseStart.month()
+    const yearlyBase = baseStart.month(monthIndex).date(1)
+    const startAt =
+      frequency === 'yearly'
+        ? yearlyBase
+            .date(Math.min(parsedDayOfMonth ?? baseStart.date(), yearlyBase.daysInMonth()))
+            .toISOString()
+        : editingRule?.start_at ?? baseStart.toISOString()
+
+    if (editingRule) {
+      const updated: RecurringRule = {
+        ...editingRule,
+        entry_type: entryType,
+        amount: Math.round(value),
+        entry_category_id: entryCategoryId || null,
+        payment_method_id: paymentMethodId || null,
+        memo: memo.trim() ? memo.trim() : null,
+        frequency,
+        day_of_month: parsedDayOfMonth,
+        holiday_adjustment: holidayAdjustment,
+        start_at: startAt,
+        updated_at: new Date().toISOString(),
+      }
+      onSave(updated)
+    } else {
+      onAdd({
+        entryType,
+        amount: Math.round(value),
+        entryCategoryId: entryCategoryId || null,
+        paymentMethodId: paymentMethodId || null,
+        memo: memo.trim() ? memo.trim() : null,
+        frequency,
+        dayOfMonth: parsedDayOfMonth,
+        holidayAdjustment,
+        startAt,
+      })
+    }
+    resetForm()
+  }
+
+  const handleDelete = () => {
+    if (!editingRule) return
+    onDelete(editingRule)
+    resetForm()
   }
 
   return (
@@ -2274,16 +2798,16 @@ const RecurringSettingsPage = ({ rules, categories, paymentMethods, onAdd }: Rec
               const category = categories.find((item) => item.id === rule.entry_category_id)
               const icon = category ? getCategoryIcon(category.icon_key) : null
               return (
-                <div key={rule.id} className="rule-card">
+                <button key={rule.id} type="button" className="rule-card" onClick={() => openEdit(rule)}>
                   <span className="rule-icon">{icon ?? <IconHome />}</span>
                   <div>
                     <strong>{rule.memo ?? category?.name ?? '未設定'}</strong>
-                    <span>
-                      {rule.day_of_month ? `毎月${rule.day_of_month}日` : '毎月'} / {paymentMethodLabel(paymentMethods, rule.payment_method_id)}
+                    <span className="rule-meta">
+                      {formatRecurringScheduleLabel(rule)} / {paymentMethodLabel(paymentMethods, rule.payment_method_id)}
                     </span>
                   </div>
                   <strong>¥{formatAmount(rule.amount)}</strong>
-                </div>
+                </button>
               )
             })}
           </div>
@@ -2293,8 +2817,11 @@ const RecurringSettingsPage = ({ rules, categories, paymentMethods, onAdd }: Rec
       {showForm && (
         <div className="sheet">
           <form className="sheet-card" onSubmit={handleSubmit}>
-            <h3>定期ルール追加</h3>
+            <h3>{editingRule ? '定期ルール編集' : '定期ルール追加'}</h3>
             <select value={entryType} onChange={(event) => setEntryType(event.target.value as EntryType)}>
+              <option value="" disabled>
+                種別
+              </option>
               <option value="expense">支出</option>
               <option value="income">収入</option>
             </select>
@@ -2305,15 +2832,19 @@ const RecurringSettingsPage = ({ rules, categories, paymentMethods, onAdd }: Rec
               onChange={(event) => setAmount(event.target.value)}
             />
             <select value={entryCategoryId} onChange={(event) => setEntryCategoryId(event.target.value)}>
-              <option value="">カテゴリ</option>
-              {categories.map((category) => (
+              <option value="" disabled>
+                カテゴリ
+              </option>
+              {formCategories.map((category) => (
                 <option key={category.id} value={category.id}>
                   {category.name}
                 </option>
               ))}
             </select>
             <select value={paymentMethodId} onChange={(event) => setPaymentMethodId(event.target.value)}>
-              <option value="">支払い方法</option>
+              <option value="" disabled>
+                {entryType === 'income' ? '入金方法' : '支払い方法'}
+              </option>
               {paymentMethods.map((method) => (
                 <option key={method.id} value={method.id}>
                   {method.name}
@@ -2326,33 +2857,87 @@ const RecurringSettingsPage = ({ rules, categories, paymentMethods, onAdd }: Rec
               value={memo}
               onChange={(event) => setMemo(event.target.value)}
             />
-            <div className="row">
+            <div className={`row ${frequency === 'yearly' ? 'row-3' : ''}`}>
               <select value={frequency} onChange={(event) => setFrequency(event.target.value)}>
+                <option value="" disabled>
+                  頻度
+                </option>
                 <option value="monthly">月次</option>
                 <option value="bimonthly">隔月</option>
                 <option value="weekly">毎週</option>
+                <option value="yearly">年次</option>
               </select>
-              <input
-                type="number"
-                min={1}
-                max={28}
-                value={dayOfMonth}
-                onChange={(event) => setDayOfMonth(event.target.value)}
-              />
+              {frequency === 'weekly' ? (
+                <select value={dayOfMonth} onChange={(event) => setDayOfMonth(event.target.value)}>
+                  <option value="" disabled>
+                    曜日
+                  </option>
+                  {['日', '月', '火', '水', '木', '金', '土'].map((label, index) => (
+                    <option key={label} value={index}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              ) : frequency === 'yearly' ? (
+                <select value={yearlyMonth} onChange={(event) => setYearlyMonth(event.target.value)}>
+                  <option value="" disabled>
+                    月
+                  </option>
+                  {Array.from({ length: 12 }).map((_, index) => (
+                    <option key={String(index + 1)} value={String(index + 1)}>
+                      {index + 1}月
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="number"
+                  min={1}
+                  max={31}
+                  value={dayOfMonth}
+                  onChange={(event) => setDayOfMonth(event.target.value)}
+                  placeholder="日"
+                />
+              )}
+              {frequency === 'yearly' && (
+                <input
+                  type="number"
+                  min={1}
+                  max={31}
+                  value={dayOfMonth}
+                  onChange={(event) => setDayOfMonth(event.target.value)}
+                  placeholder="日"
+                />
+              )}
             </div>
-            <div className="sheet-actions">
-              <button type="button" className="ghost" onClick={() => setShowForm(false)}>
-                閉じる
-              </button>
-              <button type="submit" className="primary">
-                追加
-              </button>
+            <select value={holidayAdjustment} onChange={(event) => setHolidayAdjustment(event.target.value as HolidayAdjustment)}>
+              <option value="" disabled>
+                休日調整
+              </option>
+              <option value="none">休日調整なし</option>
+              <option value="previous">前営業日に移動</option>
+              <option value="next">次営業日に移動</option>
+            </select>
+            <div className={`sheet-actions ${editingRule ? 'spread' : ''}`}>
+              {editingRule && (
+                <button type="button" className="icon-button-small danger" aria-label="削除" onClick={handleDelete}>
+                  {renderMaterialIcon('delete')}
+                </button>
+              )}
+              <div className="sheet-action-buttons">
+                <button type="button" className="ghost" onClick={resetForm}>
+                  キャンセル
+                </button>
+                <button type="submit" className="primary">
+                  {editingRule ? '保存' : '追加'}
+                </button>
+              </div>
             </div>
           </form>
         </div>
       )}
 
-      <button className="floating-button" onClick={() => setShowForm(true)}>
+      <button className="floating-button" onClick={openCreate}>
         +
       </button>
     </div>

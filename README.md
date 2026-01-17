@@ -81,6 +81,7 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
 - ダークグレーのヘッダーと、ライムグリーンのアイコンタブバーを採用する。
 - 入力（ホーム）は「収支サマリー + 進捗バー + 収入/支出の切替 + カテゴリの円形グリッド」を基本構成とする。
 - 入力（電卓）は「日付/時刻 + カテゴリ選択 + お店/場所 + メモ + 電卓キーパッド + 支払い方法 + 入力ボタン」を配置する。
+- 入力（電卓）は収入/支出の切り替えを新規追加・編集の両方で行える。
 - 支払い方法はタップごとに切り替える。
 - 電卓で四則演算を使った場合は、`=` を押して計算結果を確定してから入力する。
 - お店/場所とメモは保存時に `memo` へ統合して保持する（`"お店 / メモ"` の形式）。
@@ -99,7 +100,7 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
   - 主な項目: family_id, ym (YYYY-MM), balance, is_closed, updated_at
 - recurring_rules: 定期収入/支出のルールを保持する。
   - 主な項目: id, family_id, entry_type, amount, entry_category_id, payment_method_id
-  - 付随項目: memo, frequency, day_of_month, start_at, end_at, is_active
+  - 付随項目: memo, frequency, day_of_month, holiday_adjustment, start_at, end_at, is_active
   - 付随項目: created_at, updated_at
 - entry_categories: 明細の分類（家族単位で管理）。
   - 主な項目: id, family_id, name, type, icon_key, color, is_archived, merged_to_id
@@ -125,6 +126,7 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
 - 生成された明細は手動入力と同じ `entries` 形式を持ち、編集ロジックを共通化する。
 - 生成済みエントリは `recurring_rule_id` で追跡できるが、編集は通常の明細編集と同じ扱い。
 - ルール変更時は過去のエントリを更新せず、次回発生日以降のみ新ルールを適用する。
+- 休日調整は `holiday_adjustment` で持ち、週末の場合のみ前/次営業日に移動できる。
 - 複数端末での重複生成を防ぐため、以下のいずれかで冪等化する。
   - 例: `UNIQUE(family_id, recurring_rule_id, occurred_on)` の制約
   - 生成前の存在確認 + トランザクションでの作成

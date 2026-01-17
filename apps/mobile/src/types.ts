@@ -49,6 +49,7 @@ export type RecurringRule = {
   memo: string | null
   frequency: string
   day_of_month: number | null
+  holiday_adjustment: 'none' | 'previous' | 'next' | null
   start_at: string
   end_at: string | null
   is_active: boolean

@@ -42,6 +42,24 @@ export class KakeiboDB extends Dexie {
             }
           })
       })
+    this.version(3)
+      .stores({
+        entries: 'id, entry_type, occurred_at, occurred_on, updated_at',
+        entryCategories: 'id, sort_order, name',
+        paymentMethods: 'id, sort_order, name',
+        recurringRules: 'id, created_at',
+        outbox: 'id, created_at',
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table('recurringRules')
+          .toCollection()
+          .modify((rule) => {
+            if (!rule.holiday_adjustment) {
+              rule.holiday_adjustment = 'none'
+            }
+          })
+      })
   }
 }
 

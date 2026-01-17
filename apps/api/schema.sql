@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS recurring_rules (
   memo TEXT,
   frequency TEXT NOT NULL,
   day_of_month INTEGER,
+  holiday_adjustment TEXT NOT NULL DEFAULT 'none',
   start_at TEXT NOT NULL,
   end_at TEXT,
   is_active INTEGER NOT NULL DEFAULT 1,
