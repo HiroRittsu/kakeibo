@@ -179,7 +179,7 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
 │  │     ├─ GET /recurring-rules
 │  │     └─ GET /monthly-balances?from=YYYY-MM&to=YYYY-MM
 │  └─ 無効/なし
-│     ├─ オンライン -> Google OAuth -> セッション -> キャッシュ読込 -> 初回同期
+│     ├─ オンライン -> Google OAuth（ホワイトリスト確認） -> セッション -> キャッシュ読込 -> 初回同期
 │     └─ オフライン -> オフラインモードUI -> ローカル編集のみ許可
 │
 新規登録（スマホ）
@@ -249,16 +249,78 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
    └─ 再ログイン後に同期再開
 │
 月替わり（繰り越し）
-├─ 起動時に月変更を検知
-├─ 前月のbalanceを算出
-├─ 今月のbalanceを作成
+├─ サーバーCronで前月のbalance再計算
+├─ 今月のmonthly_balanceを作成
 ├─ 定期ルールから当月分をサーバー側で生成
-└─ 繰り越し確認/調整UIを表示
+└─ 次回同期でクライアントに反映
 │
 過去月の編集
 ├─ 対象月のbalance再計算
 └─ 以降の月のbalanceを再計算・反映
 ```
+
+## API別データフロー
+- `GET /auth/session`
+  - 目的: 既存セッションの確認
+  - 入力: Cookie（`kakeibo_session`）
+  - 出力: `session` / `null`
+  - クライアント: ログイン画面 or 同期開始
+- `GET /auth/google/start`
+  - 目的: Google OAuth開始（state保存）
+  - 入力: `next`, `origin`
+  - 出力: Googleへ302リダイレクト
+- `GET /auth/google/callback`
+  - 目的: IDトークン検証、ホワイトリスト照合、セッション発行
+  - 入力: `code`, `state`
+  - 出力: Cookie発行 + アプリへ302（拒否時は `auth_error` 付与）
+- `GET /entries`
+  - 目的: 明細の同期（差分/全量）
+  - 入力: `since`（任意）
+  - 出力: `entries[]`
+  - クライアント: IndexedDBへ保存、`last_sync`更新
+- `POST /entries`
+  - 目的: 新規明細の作成
+  - 入力: 明細JSON
+  - 出力: `entry`
+  - クライアント: outbox送信 → IndexedDB反映
+- `PATCH /entries/:id`
+  - 目的: 明細の更新
+  - 入力: 更新内容 + `if_updated_at`
+  - 出力: `entry`
+  - クライアント: outbox送信 → IndexedDB反映
+- `DELETE /entries/:id`
+  - 目的: 明細削除
+  - 入力: なし
+  - 出力: `ok`
+  - クライアント: outbox送信 → IndexedDB反映
+- `GET /entry-categories`
+  - 目的: カテゴリ同期
+  - 出力: `entry_categories[]`
+  - クライアント: IndexedDBへ保存
+- `POST /entry-categories` / `DELETE /entry-categories/:id`
+  - 目的: カテゴリ作成/削除
+  - クライアント: outbox送信 → IndexedDB反映
+- `GET /payment-methods`
+  - 目的: 支払い方法同期
+  - 出力: `payment_methods[]`
+  - クライアント: IndexedDBへ保存
+- `POST /payment-methods` / `DELETE /payment-methods/:id`
+  - 目的: 支払い方法作成/削除
+  - クライアント: outbox送信 → IndexedDB反映
+- `GET /recurring-rules`
+  - 目的: 定期ルール同期
+  - 出力: `recurring_rules[]`
+  - クライアント: IndexedDBへ保存
+- `POST /recurring-rules` / `PATCH /recurring-rules/:id` / `DELETE /recurring-rules/:id`
+  - 目的: 定期ルール作成/更新/削除
+  - クライアント: outbox送信 → IndexedDB反映
+- `GET /monthly-balances?from=YYYY-MM&to=YYYY-MM`
+  - 目的: 月次残高同期
+  - 出力: `monthly_balances[]`
+  - クライアント: IndexedDBへ保存（monthlyBalances）
+- `GET /audit-logs`
+  - 目的: 監査ログ取得（PC側予定）
+  - 出力: `audit_logs[]`
 
 ## 繰り越し仕様
 - `monthly_balance` に月次の残高を保存する（balanceは1種、is_closedで締め判定）。
