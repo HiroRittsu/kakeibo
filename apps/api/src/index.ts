@@ -1,39 +1,161 @@
 import { Hono, type Context } from 'hono'
 import { cors } from 'hono/cors'
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 
 type Bindings = {
   DB: D1Database
+  GOOGLE_CLIENT_ID?: string
+  GOOGLE_CLIENT_SECRET?: string
+  APP_ORIGIN?: string
+  ALLOWED_ORIGINS?: string
+}
+
+type SessionRow = {
+  id: string
+  user_id: string
+  family_id: string | null
+  is_pending: number | null
+  expires_at: string
+  created_at: string
+  updated_at: string
+}
+
+type UserRow = {
+  id: string
+  email: string
+  name: string | null
+  avatar_url: string | null
+}
+
+type OAuthStateRow = {
+  id: string
+  next_path: string | null
+  origin: string | null
+  expires_at: string
+}
+
+type AllowedUserRow = {
+  email: string
+  family_id: string | null
+  role: string | null
+  created_at: string
+  updated_at: string
+}
+
+type Variables = {
+  session?: SessionRow | null
 }
 
 type HonoEnv = {
   Bindings: Bindings
+  Variables: Variables
 }
 
 const app = new Hono<HonoEnv>()
 
-app.use(
-  '*',
-  cors({
-    origin: '*',
+const parseAllowedOrigins = (value?: string) =>
+  (value ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+
+const resolveCorsOrigin = (origin: string | undefined, env: Bindings) => {
+  const allowed = parseAllowedOrigins(env.ALLOWED_ORIGINS)
+  if (!origin) return allowed[0] ?? ''
+  if (allowed.length === 0) return origin
+  return allowed.includes(origin) ? origin : allowed[0] ?? ''
+}
+
+const isAllowedOrigin = (origin: string | null, env: Bindings) => {
+  if (!origin) return false
+  const allowed = parseAllowedOrigins(env.ALLOWED_ORIGINS)
+  if (allowed.length === 0) return true
+  return allowed.includes(origin)
+}
+
+app.use('*', async (c, next) => {
+  const origin = c.req.header('Origin')
+  const allowedOrigin = resolveCorsOrigin(origin, c.env)
+  return cors({
+    origin: allowedOrigin,
     allowMethods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'X-Family-Id', 'X-User-Id'],
-  })
-)
+    allowHeaders: ['Content-Type'],
+    credentials: true,
+  })(c, next)
+})
 
 const jsonError = (message: string, status = 400) => {
   return { message, status }
 }
 
-const requireFamilyId = (c: Context<HonoEnv>) => {
-  const familyId = c.req.header('X-Family-Id')?.trim()
-  if (!familyId) {
+const SESSION_COOKIE = 'kakeibo_session'
+const SESSION_TTL_DAYS = 30
+const OAUTH_STATE_TTL_MINUTES = 10
+
+const buildExpiryIso = (days: number) => new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString()
+
+const isLocalRequest = (url: string) => {
+  return url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')
+}
+
+const setSessionCookie = (c: Context<HonoEnv>, sessionId: string) => {
+  const local = isLocalRequest(c.req.url)
+  setCookie(c, SESSION_COOKIE, sessionId, {
+    httpOnly: true,
+    sameSite: local ? 'Lax' : 'None',
+    secure: !local,
+    path: '/',
+    maxAge: SESSION_TTL_DAYS * 24 * 60 * 60,
+  })
+}
+
+const clearSessionCookie = (c: Context<HonoEnv>) => {
+  deleteCookie(c, SESSION_COOKIE, { path: '/' })
+}
+
+const loadSession = async (c: Context<HonoEnv>) => {
+  const cached = c.get('session')
+  if (cached !== undefined) return cached
+  const sessionId = getCookie(c, SESSION_COOKIE)
+  if (!sessionId) {
+    c.set('session', null)
     return null
   }
-  return familyId
+  const session = await c.env.DB
+    .prepare('SELECT * FROM sessions WHERE id = ?')
+    .bind(sessionId)
+    .first<SessionRow>()
+  if (!session) {
+    clearSessionCookie(c)
+    c.set('session', null)
+    return null
+  }
+  if (new Date(session.expires_at).getTime() <= Date.now()) {
+    await c.env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(sessionId).run()
+    clearSessionCookie(c)
+    c.set('session', null)
+    return null
+  }
+  c.set('session', session)
+  return session
+}
+
+const requireSession = async (c: Context<HonoEnv>) => {
+  const session = await loadSession(c)
+  if (!session || !session.family_id) {
+    return null
+  }
+  return session
+}
+
+const requireFamilyId = (c: Context<HonoEnv>) => {
+  const session = c.get('session')
+  if (!session?.family_id) return null
+  return session.family_id
 }
 
 const getActorUserId = (c: Context<HonoEnv>) => {
-  return c.req.header('X-User-Id')?.trim() ?? 'unknown'
+  return c.get('session')?.user_id ?? 'unknown'
 }
 
 const nowIso = () => new Date().toISOString()
@@ -102,6 +224,19 @@ const getYmFromDate = (value: string) => value.slice(0, 7)
 
 const minYm = (a: string, b: string) => (ymToIndex(a) <= ymToIndex(b) ? a : b)
 
+app.use('*', async (c, next) => {
+  await loadSession(c)
+  const path = c.req.path
+  if (c.req.method === 'OPTIONS' || path === '/health' || path.startsWith('/auth/')) {
+    return next()
+  }
+  const session = c.get('session')
+  if (!session || !session.family_id) {
+    return c.json(jsonError('Unauthorized', 401), 401)
+  }
+  return next()
+})
+
 type RecurringRuleRow = {
   id: string
   family_id: string
@@ -127,6 +262,239 @@ type MonthlyBalanceRow = {
   balance?: number
   is_closed?: number
 }
+
+const createSession = async (
+  db: D1Database,
+  userId: string,
+  familyId: string | null,
+  isPending = false
+) => {
+  const now = nowIso()
+  const sessionId = crypto.randomUUID()
+  const expiresAt = buildExpiryIso(SESSION_TTL_DAYS)
+  await db
+    .prepare(
+      'INSERT INTO sessions (id, user_id, family_id, is_pending, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    )
+    .bind(sessionId, userId, familyId, isPending ? 1 : 0, expiresAt, now, now)
+    .run()
+  return { id: sessionId, user_id: userId, family_id: familyId, is_pending: isPending ? 1 : 0 }
+}
+
+const ensureUser = async (db: D1Database, user: UserRow) => {
+  const now = nowIso()
+  await db
+    .prepare(
+      'INSERT INTO users (id, email, name, avatar_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET email = excluded.email, name = excluded.name, avatar_url = excluded.avatar_url, updated_at = excluded.updated_at'
+    )
+    .bind(user.id, user.email, user.name, user.avatar_url, now, now)
+    .run()
+}
+
+const loadAllowedUser = async (db: D1Database, email: string) => {
+  return db
+    .prepare('SELECT * FROM allowed_users WHERE email = ?')
+    .bind(email.toLowerCase())
+    .first<AllowedUserRow>()
+}
+
+const ensureFamilyForAllowedUser = async (
+  db: D1Database,
+  allowed: AllowedUserRow,
+  userId: string,
+  userName: string | null
+) => {
+  const now = nowIso()
+  let familyId = allowed.family_id
+  let role = allowed.role ?? 'member'
+
+  if (!familyId) {
+    familyId = crypto.randomUUID()
+    const familyName = userName ? `${userName}の家計` : 'Family'
+    await db
+      .prepare('INSERT INTO families (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)')
+      .bind(familyId, familyName, now, now)
+      .run()
+    role = allowed.role ?? 'owner'
+    await db
+      .prepare('UPDATE allowed_users SET family_id = ?, role = ?, updated_at = ? WHERE email = ?')
+      .bind(familyId, role, now, allowed.email)
+      .run()
+  }
+
+  await db
+    .prepare(
+      'INSERT INTO members (user_id, family_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id, family_id) DO UPDATE SET role = excluded.role, updated_at = excluded.updated_at'
+    )
+    .bind(userId, familyId, role, now, now)
+    .run()
+
+  return familyId
+}
+
+
+const buildGoogleAuthUrl = (clientId: string, redirectUri: string, state: string) => {
+  const url = new URL('https://accounts.google.com/o/oauth2/v2/auth')
+  url.searchParams.set('client_id', clientId)
+  url.searchParams.set('redirect_uri', redirectUri)
+  url.searchParams.set('response_type', 'code')
+  url.searchParams.set('scope', 'openid email profile')
+  url.searchParams.set('state', state)
+  url.searchParams.set('prompt', 'consent')
+  url.searchParams.set('access_type', 'offline')
+  return url.toString()
+}
+
+const exchangeGoogleCode = async (
+  clientId: string,
+  clientSecret: string,
+  code: string,
+  redirectUri: string
+) => {
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      code,
+      redirect_uri: redirectUri,
+      grant_type: 'authorization_code',
+    }),
+  })
+  if (!response.ok) {
+    return null
+  }
+  return (await response.json()) as { id_token?: string }
+}
+
+const fetchTokenInfo = async (idToken: string) => {
+  const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`)
+  if (!response.ok) return null
+  return (await response.json()) as {
+    sub?: string
+    email?: string
+    email_verified?: string | boolean
+    name?: string
+    picture?: string
+    aud?: string
+  }
+}
+
+app.get('/auth/session', async (c) => {
+  const session = await loadSession(c)
+  if (!session) return c.json({ session: null })
+  const user = await c.env.DB.prepare('SELECT id, email, name, avatar_url FROM users WHERE id = ?')
+    .bind(session.user_id)
+    .first<UserRow>()
+  return c.json({
+    session: {
+      status: 'ready',
+      family_id: session.family_id,
+      user: user ?? { id: session.user_id, email: '', name: null, avatar_url: null },
+    },
+  })
+})
+
+app.get('/auth/google/start', async (c) => {
+  const clientId = c.env.GOOGLE_CLIENT_ID
+  if (!clientId) return c.json(jsonError('Missing GOOGLE_CLIENT_ID'), 500)
+
+  const nextPath = c.req.query('next')?.trim() ?? '/'
+  const originParam = c.req.query('origin')?.trim() ?? null
+  const origin = isAllowedOrigin(originParam, c.env) ? originParam : null
+  const stateId = crypto.randomUUID()
+  const expiresAt = new Date(Date.now() + OAUTH_STATE_TTL_MINUTES * 60 * 1000).toISOString()
+  const safeNext = nextPath.startsWith('/') ? nextPath : '/'
+
+  await c.env.DB
+    .prepare(
+      'INSERT INTO oauth_states (id, next_path, origin, created_at, expires_at) VALUES (?, ?, ?, ?, ?)'
+    )
+    .bind(stateId, safeNext, origin, nowIso(), expiresAt)
+    .run()
+
+  const redirectUri = new URL('/auth/google/callback', c.req.url).toString()
+  return c.redirect(buildGoogleAuthUrl(clientId, redirectUri, stateId), 302)
+})
+
+app.get('/auth/google/callback', async (c) => {
+  const code = c.req.query('code')
+  const stateId = c.req.query('state')
+  const clientId = c.env.GOOGLE_CLIENT_ID
+  const clientSecret = c.env.GOOGLE_CLIENT_SECRET
+  if (!code || !stateId || !clientId || !clientSecret) {
+    return c.json(jsonError('Invalid OAuth request'), 400)
+  }
+
+  const state = await c.env.DB
+    .prepare('SELECT * FROM oauth_states WHERE id = ?')
+    .bind(stateId)
+    .first<OAuthStateRow>()
+  if (!state || new Date(state.expires_at).getTime() <= Date.now()) {
+    return c.json(jsonError('OAuth state expired'), 400)
+  }
+  await c.env.DB.prepare('DELETE FROM oauth_states WHERE id = ?').bind(stateId).run()
+
+  const redirectUri = new URL('/auth/google/callback', c.req.url).toString()
+  const token = await exchangeGoogleCode(clientId, clientSecret, code, redirectUri)
+  if (!token?.id_token) return c.json(jsonError('Failed to exchange token'), 400)
+
+  const tokenInfo = await fetchTokenInfo(token.id_token)
+  if (!tokenInfo?.sub || tokenInfo.aud !== clientId) {
+    return c.json(jsonError('Invalid ID token'), 400)
+  }
+
+  const targetOrigin = state.origin ?? c.env.APP_ORIGIN
+  const safeOrigin = isAllowedOrigin(targetOrigin ?? null, c.env) ? targetOrigin : null
+  const targetBase = safeOrigin ?? c.env.APP_ORIGIN ?? new URL(c.req.url).origin
+  const redirectToApp = (errorCode?: string) => {
+    const url = new URL(state.next_path ?? '/', targetBase)
+    if (errorCode) url.searchParams.set('auth_error', errorCode)
+    return c.redirect(url.toString(), 302)
+  }
+
+  const email = tokenInfo.email?.toLowerCase()
+  const emailVerified = tokenInfo.email_verified
+  if (!email) {
+    return c.json(jsonError('Email is required'), 400)
+  }
+  if (emailVerified === false || emailVerified === 'false') {
+    return redirectToApp('email_unverified')
+  }
+
+  const allowed = await loadAllowedUser(c.env.DB, email)
+  if (!allowed) {
+    return redirectToApp('not_allowed')
+  }
+
+  await ensureUser(c.env.DB, {
+    id: tokenInfo.sub,
+    email,
+    name: tokenInfo.name ?? null,
+    avatar_url: tokenInfo.picture ?? null,
+  })
+
+  const familyId = await ensureFamilyForAllowedUser(
+    c.env.DB,
+    allowed,
+    tokenInfo.sub,
+    tokenInfo.name ?? null
+  )
+  const session = await createSession(c.env.DB, tokenInfo.sub, familyId, false)
+  setSessionCookie(c, session.id)
+
+  return redirectToApp()
+})
+
+app.post('/auth/logout', async (c) => {
+  const session = await loadSession(c)
+  if (session) {
+    await c.env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(session.id).run()
+  }
+  clearSessionCookie(c)
+  return c.json({ ok: true })
+})
 
 const getDueDay = (target: Date, ruleDay: number | null, fallback: Date) => {
   const candidate = ruleDay ?? fallback.getUTCDate()

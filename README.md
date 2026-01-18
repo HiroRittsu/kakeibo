@@ -49,11 +49,21 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
 ```
 - Cronは `apps/api/wrangler.jsonc` の `triggers.crons` で設定（UTC基準、JSTは+9時間）
 
+### 環境変数（API）
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` をWranglerのSecretで設定
+- `APP_ORIGIN` にフロントのURLを設定（例: `https://kakeibo-mobile.pages.dev`）
+- `ALLOWED_ORIGINS` にCORS許可するOriginをカンマ区切りで指定（例: `https://kakeibo-mobile.pages.dev,http://127.0.0.1:5173`）
+
+### 環境変数（Mobile）
+- `VITE_API_BASE_URL` にAPIのURLを設定（例: `https://api.zq1012noza.workers.dev`）
+
 ## 主要要件
 - 無料枠に収めるため低運用コストで進める。
 - オフラインでも入力できる。
 - 手動の「更新」ボタンで同期（ポーリング方式）。
 - 競合検知は警告のみ（書き込みは通す、同一IDは最新更新で上書き）。
+- 認証はGoogle OAuth + サーバーセッションCookieで行う（SPA側にトークンは保持しない）。
+- 事前にD1のホワイトリスト（メール）へ登録したアカウントのみログイン可能。
 - 月替わり時に繰り越しUIを表示する。
 - 定期的な収入・支出をルール登録できる。
 - 明細カテゴリを追加/編集/並び替えできる。
@@ -76,6 +86,15 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
 
 ### PC
 - 後で実装予定: 詳細表示・設定・レポート・CSV・監査ログ
+
+## 認証/ホワイトリスト
+- `/auth/google/start` → Google OAuth へリダイレクト。
+- `/auth/google/callback` でユーザー情報を検証し、セッションを発行。
+- `allowed_users` に登録済みのメールのみログイン可能（未登録は拒否）。
+- `allowed_users.family_id` が未設定の場合は初回ログイン時に家族を作成し、オーナー権限で紐付ける。
+- APIはセッションCookie必須（`SameSite=None; Secure`、ローカルは `Lax`）。
+- `allowed_users` はD1に手動登録（メールは小文字）。
+  - 例: `INSERT INTO allowed_users (email, role, created_at, updated_at) VALUES ('user@example.com', 'owner', datetime('now'), datetime('now'));`
 
 ## デザイン指針（スマホ）
 - ダークグレーのヘッダーと、ライムグリーンのアイコンタブバーを採用する。
@@ -108,6 +127,16 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
   - 主な項目: id, family_id, name, type
 - members: 家族のメンバー管理。
   - 主な項目: user_id, family_id, role
+- families: 家族の基本情報。
+  - 主な項目: id, name
+- users: Google OAuth のユーザー。
+  - 主な項目: id(google sub), email, name, avatar_url
+- allowed_users: ログイン許可のホワイトリスト。
+  - 主な項目: email, family_id, role
+- sessions: サーバーセッション。
+  - 主な項目: id, user_id, family_id, is_pending, expires_at
+- oauth_states: OAuthの一時状態。
+  - 主な項目: id, next_path, origin, expires_at
 - audit_logs: 共有編集ログ（誰が何をしたか）。
   - 主な項目: id, family_id, actor_user_id, action, target_type, target_id
   - 付随項目: summary, created_at

@@ -3,7 +3,7 @@ import dayjs from 'dayjs'
 import { useLiveQuery } from 'dexie-react-hooks'
 import './App.css'
 import { db } from './db'
-import { getFamilyId } from './lib/api'
+import { apiFetch, getApiBaseUrl, getFamilyId, setIdentity } from './lib/api'
 import { enqueueOutbox, syncOutbox } from './lib/sync'
 import type { Entry, EntryCategory, EntryType, MonthlyBalance, PaymentMethod, RecurringRule } from './types'
 
@@ -37,6 +37,17 @@ type EntryInputSeed = {
   createdAt?: string
   updatedAt?: string
   recurringRuleId?: string | null
+}
+
+type AuthSession = {
+  status: 'ready'
+  family_id: string | null
+  user: {
+    id: string
+    email: string
+    name: string | null
+    avatar_url: string | null
+  }
 }
 
 type DayTotals = {
@@ -683,6 +694,32 @@ const combineMemo = (place: string, memo: string) => {
   return null
 }
 
+type AuthScreenProps = {
+  status: 'loading' | 'logged-out'
+  onLogin: () => void
+  error: string | null
+}
+
+const AuthScreen = ({ status, onLogin, error }: AuthScreenProps) => {
+  const isLoading = status === 'loading'
+  return (
+    <div className="auth-screen">
+      <div className="auth-card">
+        <h1>Kakeibo</h1>
+        <p className="muted">
+          {isLoading ? 'セッションを確認しています。' : 'Googleアカウントでログインします。'}
+        </p>
+        {error && <p className="auth-error">{error}</p>}
+        <div className="auth-actions">
+          <button className="primary full" onClick={onLogin} disabled={isLoading}>
+            Googleでログイン
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('home')
   const [page, setPage] = useState<PageKey>('main')
@@ -694,6 +731,8 @@ function App() {
   const [paymentType, setPaymentType] = useState<PaymentType>('cash')
   const [menuOpen, setMenuOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [authStatus, setAuthStatus] = useState<'loading' | 'logged-out' | 'ready'>('loading')
+  const [authError, setAuthError] = useState<string | null>(null)
 
   const entries = useLiveQuery(() => db.entries.orderBy('occurred_at').reverse().toArray(), [])
   const entryCategories = useLiveQuery(() => db.entryCategories.orderBy('sort_order').toArray(), [])
@@ -721,17 +760,72 @@ function App() {
     return new Map((monthlyBalances ?? []).map((row) => [row.ym, row]))
   }, [monthlyBalances])
 
+  const loadSession = async () => {
+    try {
+      const response = await apiFetch('/auth/session')
+      if (!response.ok) {
+        setAuthStatus('logged-out')
+        return
+      }
+      const data = (await response.json()) as { session: AuthSession | null }
+      if (!data.session) {
+        setAuthStatus('logged-out')
+        return
+      }
+      if (!data.session.family_id) {
+        setAuthStatus('logged-out')
+        return
+      }
+      setIdentity(data.session.family_id, data.session.user.id)
+      setAuthStatus('ready')
+    } catch {
+      setAuthStatus('logged-out')
+    }
+  }
+
   useEffect(() => {
-    void syncOutbox()
+    const params = new URLSearchParams(window.location.search)
+    const error = params.get('auth_error')
+    if (error) {
+      const message =
+        error === 'email_unverified'
+          ? 'Googleアカウントのメール認証が必要です'
+          : 'このアカウントは許可されていません'
+      setAuthError(message)
+      params.delete('auth_error')
+      const next = params.toString()
+      window.history.replaceState({}, '', `${window.location.pathname}${next ? `?${next}` : ''}`)
+    }
+    void loadSession()
   }, [])
 
+  useEffect(() => {
+    if (authStatus !== 'ready') return
+    void syncOutbox()
+  }, [authStatus])
+
   const handleSync = async () => {
+    if (authStatus !== 'ready') return
     setSyncing(true)
     try {
       await syncOutbox()
     } finally {
       setSyncing(false)
     }
+  }
+
+  const handleLogin = () => {
+    setAuthError(null)
+    const apiBase = getApiBaseUrl()
+    if (!apiBase) {
+      setAuthError('APIのURLが設定されていません')
+      return
+    }
+    const params = new URLSearchParams({
+      next: window.location.pathname,
+      origin: window.location.origin,
+    })
+    window.location.href = `${apiBase}/auth/google/start?${params.toString()}`
   }
 
   const handleSaveEntry = async (payload: EntryInputSeed) => {
@@ -1014,6 +1108,16 @@ function App() {
           ? TAB_LABELS[activeTab]
           : PAGE_TITLES[page]
   const showSync = page === 'main' || page === 'balance'
+
+  if (authStatus !== 'ready') {
+    return (
+      <AuthScreen
+        status={authStatus}
+        onLogin={handleLogin}
+        error={authError}
+      />
+    )
+  }
 
   return (
     <div className="app">
