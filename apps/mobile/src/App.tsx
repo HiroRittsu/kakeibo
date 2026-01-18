@@ -954,6 +954,7 @@ function App() {
         icon_key: category.icon_key ?? null,
         color: category.color ?? null,
         sort_order: category.sort_order,
+        client_updated_at: category.updated_at,
       },
       created_at: new Date().toISOString(),
     })
@@ -1012,6 +1013,7 @@ function App() {
         name: method.name,
         type: method.type,
         sort_order: method.sort_order,
+        client_updated_at: method.updated_at,
       },
       created_at: now,
     })
@@ -1051,6 +1053,7 @@ function App() {
         end_at: recurringRule.end_at,
         is_active: recurringRule.is_active,
         holiday_adjustment: recurringRule.holiday_adjustment ?? 'none',
+        client_updated_at: recurringRule.updated_at,
       },
       created_at: new Date().toISOString(),
     })

@@ -1,4 +1,3 @@
-import dayjs from 'dayjs'
 import { apiFetch, getFamilyId } from './api'
 import { db } from '../db'
 import type { Entry, EntryCategory, PaymentMethod, RecurringRule, OutboxItem } from '../types'
@@ -97,32 +96,6 @@ const applyMonthlyBalance = async (row: { ym?: string; balance?: number; is_clos
   })
 }
 
-const pullMonthlyBalances = async () => {
-  const familyId = getFamilyId()
-  const toYm = dayjs().format('YYYY-MM')
-  const fromYm = dayjs().subtract(12, 'month').format('YYYY-MM')
-  const response = await apiFetch(`/monthly-balances?from=${fromYm}&to=${toYm}`)
-  if (!response.ok) return false
-  const data = (await response.json()) as {
-    monthly_balances?: { ym?: string; balance?: number; is_closed?: number; updated_at?: string }[]
-  }
-  const rows = data.monthly_balances ?? []
-  const records = rows.filter((row) => typeof row.ym === 'string' && typeof row.balance === 'number')
-  if (records.length) {
-    await db.monthlyBalances.bulkPut(
-      records.map((row) => ({
-        id: buildMonthlyBalanceId(familyId, row.ym as string),
-        family_id: familyId,
-        ym: row.ym as string,
-        balance: row.balance as number,
-        is_closed: row.is_closed ?? 0,
-        updated_at: row.updated_at ?? new Date().toISOString(),
-      }))
-    )
-  }
-  return true
-}
-
 const syncItem = async (item: OutboxItem) => {
   const response = await apiFetch(item.endpoint, {
     method: item.method,
@@ -144,46 +117,6 @@ const syncItem = async (item: OutboxItem) => {
   } else if (item.endpoint.startsWith('/recurring-rules')) {
     await applyRecurringRule((data.recurring_rule as RecurringRule | undefined) ?? null)
   }
-}
-
-const pullEntries = async (since?: string | null) => {
-  const response = await apiFetch(`/entries${since ? `?since=${encodeURIComponent(since)}` : ''}`)
-  if (!response.ok) return false
-  const data = (await response.json()) as { entries: Entry[] }
-  if (data.entries?.length) {
-    await db.entries.bulkPut(data.entries.map((entry) => normalizeEntry(entry)))
-  }
-  return true
-}
-
-const pullEntryCategories = async () => {
-  const response = await apiFetch('/entry-categories')
-  if (!response.ok) return false
-  const data = (await response.json()) as { entry_categories: EntryCategory[] }
-  if (data.entry_categories?.length) {
-    await db.entryCategories.bulkPut(data.entry_categories)
-  }
-  return true
-}
-
-const pullPaymentMethods = async () => {
-  const response = await apiFetch('/payment-methods')
-  if (!response.ok) return false
-  const data = (await response.json()) as { payment_methods: PaymentMethod[] }
-  if (data.payment_methods?.length) {
-    await db.paymentMethods.bulkPut(data.payment_methods)
-  }
-  return true
-}
-
-const pullRecurringRules = async () => {
-  const response = await apiFetch('/recurring-rules')
-  if (!response.ok) return false
-  const data = (await response.json()) as { recurring_rules: RecurringRule[] }
-  if (data.recurring_rules?.length) {
-    await db.recurringRules.bulkPut(data.recurring_rules)
-  }
-  return true
 }
 
 const applyChange = async (change: SyncChange) => {
@@ -243,29 +176,61 @@ const fetchChanges = async (cursor: number, limit = 200) => {
   return (await response.json()) as { changes: SyncChange[]; next_cursor: number; server_time: string }
 }
 
-const fetchSyncHead = async () => {
-  const response = await apiFetch('/sync?cursor=0&limit=0')
-  if (!response.ok) throw new SyncError('pull', response.status, `Failed to sync head: ${response.status}`)
-  return (await response.json()) as { changes: SyncChange[]; next_cursor: number; server_time: string }
+const fetchBootstrap = async () => {
+  const response = await apiFetch('/bootstrap')
+  if (!response.ok) throw new SyncError('pull', response.status, `Failed to bootstrap: ${response.status}`)
+  return (await response.json()) as {
+    entries: Entry[]
+    entry_categories: EntryCategory[]
+    payment_methods: PaymentMethod[]
+    recurring_rules: RecurringRule[]
+    monthly_balances: { ym?: string; balance?: number; is_closed?: number; updated_at?: string }[]
+    next_cursor: number
+    server_time: string
+  }
 }
 
 const syncFromServer = async () => {
   const cursor = getSyncCursor()
 
   if (!cursor) {
-    const entriesOk = await pullEntries(null)
-    const [categoriesOk, paymentOk, rulesOk, balancesOk] = await Promise.all([
-      pullEntryCategories(),
-      pullPaymentMethods(),
-      pullRecurringRules(),
-      pullMonthlyBalances(),
-    ])
-    if (!entriesOk || !categoriesOk || !paymentOk || !rulesOk || !balancesOk) {
-      throw new Error('Initial sync failed')
-    }
-    const head = await fetchSyncHead()
-    setSyncCursor(head.next_cursor)
-    return head.server_time
+    const bootstrap = await fetchBootstrap()
+    const familyId = getFamilyId()
+    const balanceRecords = (bootstrap.monthly_balances ?? []).filter(
+      (row) => typeof row.ym === 'string' && typeof row.balance === 'number'
+    )
+    await db.transaction(
+      'rw',
+      [db.entries, db.entryCategories, db.paymentMethods, db.recurringRules, db.monthlyBalances],
+      async () => {
+        if (bootstrap.entries?.length) {
+          await db.entries.bulkPut(bootstrap.entries.map((entry) => normalizeEntry(entry)))
+        }
+        if (bootstrap.entry_categories?.length) {
+          await db.entryCategories.bulkPut(bootstrap.entry_categories)
+        }
+        if (bootstrap.payment_methods?.length) {
+          await db.paymentMethods.bulkPut(bootstrap.payment_methods)
+        }
+        if (bootstrap.recurring_rules?.length) {
+          await db.recurringRules.bulkPut(bootstrap.recurring_rules)
+        }
+        if (balanceRecords.length) {
+          await db.monthlyBalances.bulkPut(
+            balanceRecords.map((row) => ({
+              id: buildMonthlyBalanceId(familyId, row.ym as string),
+              family_id: familyId,
+              ym: row.ym as string,
+              balance: row.balance as number,
+              is_closed: row.is_closed ?? 0,
+              updated_at: row.updated_at ?? new Date().toISOString(),
+            }))
+          )
+        }
+      }
+    )
+    setSyncCursor(bootstrap.next_cursor)
+    return bootstrap.server_time
   }
 
   let nextCursor = cursor

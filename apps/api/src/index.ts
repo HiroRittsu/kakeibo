@@ -204,6 +204,10 @@ const formatTokyoYm = (date = new Date()) => {
   return `${year}-${month}`
 }
 
+const isSameValue = (left: unknown, right: unknown) => {
+  return (left ?? null) === (right ?? null)
+}
+
 const ymToIndex = (ym: string) => {
   const [yearRaw, monthRaw] = ym.split('-')
   const year = Number(yearRaw)
@@ -823,6 +827,47 @@ app.get('/sync', async (c) => {
   return c.json({ changes, next_cursor: nextCursor, server_time: serverTime })
 })
 
+app.get('/bootstrap', async (c) => {
+  const familyId = requireFamilyId(c)
+  if (!familyId) return c.json(jsonError('Unauthorized', 401), 401)
+
+  const db = c.env.DB
+  const serverTime = nowIso()
+
+  const [entries, entryCategories, paymentMethods, recurringRules, monthlyBalances, latestChange] = await Promise.all([
+    db.prepare('SELECT * FROM entries WHERE family_id = ? ORDER BY occurred_at DESC, updated_at DESC')
+      .bind(familyId)
+      .all(),
+    db.prepare('SELECT * FROM entry_categories WHERE family_id = ? ORDER BY sort_order, name')
+      .bind(familyId)
+      .all(),
+    db.prepare('SELECT * FROM payment_methods WHERE family_id = ? ORDER BY sort_order, name')
+      .bind(familyId)
+      .all(),
+    db.prepare('SELECT * FROM recurring_rules WHERE family_id = ? ORDER BY created_at DESC')
+      .bind(familyId)
+      .all(),
+    db.prepare('SELECT * FROM monthly_balance WHERE family_id = ? ORDER BY ym')
+      .bind(familyId)
+      .all(),
+    db.prepare('SELECT MAX(id) as max_id FROM change_logs WHERE family_id = ?')
+      .bind(familyId)
+      .first<{ max_id?: number | null }>(),
+  ])
+
+  const nextCursor = typeof latestChange?.max_id === 'number' ? latestChange.max_id : 0
+
+  return c.json({
+    entries: entries.results ?? [],
+    entry_categories: entryCategories.results ?? [],
+    payment_methods: paymentMethods.results ?? [],
+    recurring_rules: recurringRules.results ?? [],
+    monthly_balances: monthlyBalances.results ?? [],
+    next_cursor: nextCursor,
+    server_time: serverTime,
+  })
+})
+
 app.get('/entries', async (c) => {
   const familyId = requireFamilyId(c)
   if (!familyId) return c.json(jsonError('X-Family-Id is required'), 400)
@@ -865,16 +910,39 @@ app.post('/entries', async (c) => {
   const paymentMethodId = typeof payload.payment_method_id === 'string' ? payload.payment_method_id : null
   const recurringRuleId = typeof payload.recurring_rule_id === 'string' ? payload.recurring_rule_id : null
   const clientUpdatedAt = typeof payload.client_updated_at === 'string' ? payload.client_updated_at : null
-  const createdAt = nowIso()
-  const updatedAt = nowIso()
+  const normalizedAmount = Math.round(amount)
 
   const db = c.env.DB
   const existing = await db
-    .prepare('SELECT occurred_on, updated_at FROM entries WHERE id = ? AND family_id = ?')
+    .prepare('SELECT * FROM entries WHERE id = ? AND family_id = ?')
     .bind(id, familyId)
     .first()
 
   const conflict = !!(existing?.updated_at && clientUpdatedAt && existing.updated_at !== clientUpdatedAt)
+  const matchesExisting =
+    !!existing &&
+    existing.entry_type === entryType &&
+    existing.amount === normalizedAmount &&
+    isSameValue(existing.entry_category_id, entryCategoryId) &&
+    isSameValue(existing.payment_method_id, paymentMethodId) &&
+    isSameValue(existing.memo, memo) &&
+    existing.occurred_at === occurredAt &&
+    existing.occurred_on === occurredOn &&
+    isSameValue(existing.recurring_rule_id, recurringRuleId)
+
+  if (conflict) {
+    if (matchesExisting) {
+      return c.json({ entry: existing, conflict: false, idempotent: true })
+    }
+    return c.json({ entry: existing, conflict: true }, 409)
+  }
+
+  if (matchesExisting) {
+    return c.json({ entry: existing, conflict: false, idempotent: true })
+  }
+
+  const createdAt = existing?.created_at ?? nowIso()
+  const updatedAt = nowIso()
 
   await db
     .prepare(
@@ -884,7 +952,7 @@ app.post('/entries', async (c) => {
       id,
       familyId,
       entryType,
-      Math.round(amount),
+      normalizedAmount,
       entryCategoryId,
       paymentMethodId,
       memo,
@@ -920,7 +988,7 @@ app.post('/entries', async (c) => {
     await recordChange(db, familyId, 'entries', id, 'upsert', { entry })
   }
 
-  return c.json({ entry, conflict })
+  return c.json({ entry, conflict: false })
 })
 
 app.patch('/entries/:id', async (c) => {
@@ -957,6 +1025,26 @@ app.patch('/entries/:id', async (c) => {
   const updatedAt = nowIso()
 
   const conflict = !!(existing.updated_at && clientUpdatedAt && existing.updated_at !== clientUpdatedAt)
+  const matchesExisting =
+    existing.entry_type === entryType &&
+    existing.amount === amount &&
+    isSameValue(existing.entry_category_id, entryCategoryId) &&
+    isSameValue(existing.payment_method_id, paymentMethodId) &&
+    isSameValue(existing.memo, memo) &&
+    existing.occurred_at === occurredAt &&
+    existing.occurred_on === occurredOn &&
+    isSameValue(existing.recurring_rule_id, recurringRuleId)
+
+  if (conflict) {
+    if (matchesExisting) {
+      return c.json({ entry: existing, conflict: false, idempotent: true })
+    }
+    return c.json({ entry: existing, conflict: true }, 409)
+  }
+
+  if (matchesExisting) {
+    return c.json({ entry: existing, conflict: false, idempotent: true })
+  }
 
   await db
     .prepare(
@@ -991,7 +1079,7 @@ app.patch('/entries/:id', async (c) => {
     await recordChange(db, familyId, 'entries', id, 'upsert', { entry })
   }
 
-  return c.json({ entry, conflict })
+  return c.json({ entry, conflict: false })
 })
 
 app.delete('/entries/:id', async (c) => {
@@ -1044,7 +1132,31 @@ app.post('/entry-categories', async (c) => {
 
   const id = typeof payload.id === 'string' ? payload.id : crypto.randomUUID()
   const sortOrder = typeof payload.sort_order === 'number' ? Math.round(payload.sort_order) : 0
-  const createdAt = nowIso()
+  const clientUpdatedAt = typeof payload.client_updated_at === 'string' ? payload.client_updated_at : null
+  const existing = await c.env.DB
+    .prepare('SELECT * FROM entry_categories WHERE id = ? AND family_id = ?')
+    .bind(id, familyId)
+    .first()
+  const matchesExisting =
+    !!existing &&
+    existing.name === name &&
+    existing.type === type &&
+    isSameValue(existing.icon_key, iconKey) &&
+    isSameValue(existing.color, color) &&
+    existing.sort_order === sortOrder
+  const conflict = !!(existing?.updated_at && clientUpdatedAt && existing.updated_at !== clientUpdatedAt)
+  if (conflict) {
+    if (matchesExisting) {
+      return c.json({ entry_category: existing, conflict: false, idempotent: true })
+    }
+    return c.json(jsonError('Conflict', 409), 409)
+  }
+
+  if (matchesExisting) {
+    return c.json({ entry_category: existing, conflict: false, idempotent: true })
+  }
+
+  const createdAt = existing?.created_at ?? nowIso()
   const updatedAt = nowIso()
 
   await c.env.DB
@@ -1054,7 +1166,15 @@ app.post('/entry-categories', async (c) => {
     .bind(id, familyId, name, type, iconKey, color, sortOrder, createdAt, updatedAt)
     .run()
 
-  await recordAudit(c.env.DB, familyId, getActorUserId(c), 'update', 'entry_categories', id, name)
+  await recordAudit(
+    c.env.DB,
+    familyId,
+    getActorUserId(c),
+    existing ? 'update' : 'create',
+    'entry_categories',
+    id,
+    name
+  )
 
   const entryCategory = await c.env.DB
     .prepare('SELECT * FROM entry_categories WHERE id = ? AND family_id = ?')
@@ -1103,7 +1223,26 @@ app.post('/payment-methods', async (c) => {
 
   const id = typeof payload.id === 'string' ? payload.id : crypto.randomUUID()
   const sortOrder = typeof payload.sort_order === 'number' ? Math.round(payload.sort_order) : 0
-  const createdAt = nowIso()
+  const clientUpdatedAt = typeof payload.client_updated_at === 'string' ? payload.client_updated_at : null
+  const existing = await c.env.DB
+    .prepare('SELECT * FROM payment_methods WHERE id = ? AND family_id = ?')
+    .bind(id, familyId)
+    .first()
+  const matchesExisting =
+    !!existing && existing.name === name && existing.type === type && existing.sort_order === sortOrder
+  const conflict = !!(existing?.updated_at && clientUpdatedAt && existing.updated_at !== clientUpdatedAt)
+  if (conflict) {
+    if (matchesExisting) {
+      return c.json({ payment_method: existing, conflict: false, idempotent: true })
+    }
+    return c.json(jsonError('Conflict', 409), 409)
+  }
+
+  if (matchesExisting) {
+    return c.json({ payment_method: existing, conflict: false, idempotent: true })
+  }
+
+  const createdAt = existing?.created_at ?? nowIso()
   const updatedAt = nowIso()
 
   await c.env.DB
@@ -1113,7 +1252,15 @@ app.post('/payment-methods', async (c) => {
     .bind(id, familyId, name, type, sortOrder, createdAt, updatedAt)
     .run()
 
-  await recordAudit(c.env.DB, familyId, getActorUserId(c), 'update', 'payment_methods', id, name)
+  await recordAudit(
+    c.env.DB,
+    familyId,
+    getActorUserId(c),
+    existing ? 'update' : 'create',
+    'payment_methods',
+    id,
+    name
+  )
 
   const paymentMethod = await c.env.DB
     .prepare('SELECT * FROM payment_methods WHERE id = ? AND family_id = ?')
@@ -1173,7 +1320,38 @@ app.post('/recurring-rules', async (c) => {
   const startAt = typeof payload.start_at === 'string' ? payload.start_at : nowIso()
   const endAt = typeof payload.end_at === 'string' ? payload.end_at : null
   const isActive = typeof payload.is_active === 'boolean' ? payload.is_active : true
-  const createdAt = nowIso()
+  const clientUpdatedAt = typeof payload.client_updated_at === 'string' ? payload.client_updated_at : null
+  const existing = await c.env.DB
+    .prepare('SELECT * FROM recurring_rules WHERE id = ? AND family_id = ?')
+    .bind(id, familyId)
+    .first()
+  const normalizedAmount = Math.round(payload.amount)
+  const matchesExisting =
+    !!existing &&
+    existing.entry_type === payload.entry_type &&
+    existing.amount === normalizedAmount &&
+    isSameValue(existing.entry_category_id, entryCategoryId) &&
+    isSameValue(existing.payment_method_id, paymentMethodId) &&
+    isSameValue(existing.memo, memo) &&
+    existing.frequency === frequency &&
+    isSameValue(existing.day_of_month, dayOfMonth) &&
+    existing.holiday_adjustment === holidayAdjustment &&
+    existing.start_at === startAt &&
+    isSameValue(existing.end_at, endAt) &&
+    existing.is_active === (isActive ? 1 : 0)
+  const conflict = !!(existing?.updated_at && clientUpdatedAt && existing.updated_at !== clientUpdatedAt)
+  if (conflict) {
+    if (matchesExisting) {
+      return c.json({ recurring_rule: existing, conflict: false, idempotent: true })
+    }
+    return c.json(jsonError('Conflict', 409), 409)
+  }
+
+  if (matchesExisting) {
+    return c.json({ recurring_rule: existing, conflict: false, idempotent: true })
+  }
+
+  const createdAt = existing?.created_at ?? nowIso()
   const updatedAt = nowIso()
 
   await c.env.DB
@@ -1184,7 +1362,7 @@ app.post('/recurring-rules', async (c) => {
       id,
       familyId,
       payload.entry_type,
-      Math.round(payload.amount),
+      normalizedAmount,
       entryCategoryId,
       paymentMethodId,
       memo,
@@ -1199,7 +1377,15 @@ app.post('/recurring-rules', async (c) => {
     )
     .run()
 
-  await recordAudit(c.env.DB, familyId, getActorUserId(c), 'update', 'recurring_rules', id, memo ?? '')
+  await recordAudit(
+    c.env.DB,
+    familyId,
+    getActorUserId(c),
+    existing ? 'update' : 'create',
+    'recurring_rules',
+    id,
+    memo ?? ''
+  )
 
   const recurringRule = await c.env.DB
     .prepare('SELECT * FROM recurring_rules WHERE id = ? AND family_id = ?')
