@@ -4,7 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import './App.css'
 import { db } from './db'
 import { apiFetch, getApiBaseUrl, getFamilyId, setIdentity } from './lib/api'
-import { enqueueOutbox, syncOutbox } from './lib/sync'
+import { enqueueOutbox, syncOutbox, type SyncFailure } from './lib/sync'
 import type { Entry, EntryCategory, EntryType, MonthlyBalance, PaymentMethod, RecurringRule } from './types'
 
 type TabKey = 'home' | 'history' | 'reports'
@@ -694,6 +694,24 @@ const combineMemo = (place: string, memo: string) => {
   return null
 }
 
+const formatSyncFailureMessage = (failure: SyncFailure) => {
+  const status = failure.status
+  const actionLabel = failure.stage === 'outbox' ? '送信' : '同期'
+  if (status === 401 || status === 403) {
+    return 'ログインが必要です'
+  }
+  if (status === 409) {
+    return '同期中に競合が発生しました'
+  }
+  if (status && status >= 500) {
+    return `${actionLabel}に失敗しました（サーバーエラー）`
+  }
+  if (status) {
+    return `${actionLabel}に失敗しました`
+  }
+  return '通信に失敗しました。ネットワークを確認してください'
+}
+
 type AuthScreenProps = {
   status: 'loading' | 'logged-out'
   onLogin: () => void
@@ -731,8 +749,10 @@ function App() {
   const [paymentType, setPaymentType] = useState<PaymentType>('cash')
   const [menuOpen, setMenuOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [toast, setToast] = useState<{ message: string; type: 'error' | 'info' } | null>(null)
   const [authStatus, setAuthStatus] = useState<'loading' | 'logged-out' | 'ready'>('loading')
   const [authError, setAuthError] = useState<string | null>(null)
+  const toastTimerRef = useRef<number | null>(null)
 
   const entries = useLiveQuery(() => db.entries.orderBy('occurred_at').reverse().toArray(), [])
   const entryCategories = useLiveQuery(() => db.entryCategories.orderBy('sort_order').toArray(), [])
@@ -783,6 +803,24 @@ function App() {
     }
   }
 
+  const showToast = (message: string, type: 'error' | 'info' = 'error') => {
+    setToast({ message, type })
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current)
+      toastTimerRef.current = null
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null)
+    }, 3000)
+  }
+
+  const runSync = async () => {
+    const result = await syncOutbox()
+    if (!result.ok) {
+      showToast(formatSyncFailureMessage(result.failure))
+    }
+  }
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const error = params.get('auth_error')
@@ -800,15 +838,24 @@ function App() {
   }, [])
 
   useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        window.clearTimeout(toastTimerRef.current)
+        toastTimerRef.current = null
+      }
+    }
+  }, [])
+
+  useEffect(() => {
     if (authStatus !== 'ready') return
-    void syncOutbox()
+    void runSync()
   }, [authStatus])
 
   const handleSync = async () => {
     if (authStatus !== 'ready') return
     setSyncing(true)
     try {
-      await syncOutbox()
+      await runSync()
     } finally {
       setSyncing(false)
     }
@@ -870,7 +917,7 @@ function App() {
       })
     }
 
-    void syncOutbox()
+    void runSync()
   }
 
   const handleDeleteEntry = async (entryId: string) => {
@@ -891,7 +938,7 @@ function App() {
       payload: null,
       created_at: new Date().toISOString(),
     })
-    void syncOutbox()
+    void runSync()
   }
 
   const handleSaveCategory = async (category: EntryCategory) => {
@@ -910,7 +957,7 @@ function App() {
       },
       created_at: new Date().toISOString(),
     })
-    void syncOutbox()
+    void runSync()
   }
 
   const handleAddCategory = async (name: string, type: string) => {
@@ -940,7 +987,7 @@ function App() {
       created_at: new Date().toISOString(),
     })
 
-    void syncOutbox()
+    void runSync()
   }
 
   const handleAddPaymentMethod = async (name: string, type: string) => {
@@ -969,7 +1016,7 @@ function App() {
       created_at: now,
     })
 
-    void syncOutbox()
+    void runSync()
   }
 
   const handleDeletePaymentMethod = async (method: PaymentMethod) => {
@@ -982,7 +1029,7 @@ function App() {
       created_at: new Date().toISOString(),
     })
 
-    void syncOutbox()
+    void runSync()
   }
 
   const handleSaveRecurringRule = async (recurringRule: RecurringRule) => {
@@ -1008,7 +1055,7 @@ function App() {
       created_at: new Date().toISOString(),
     })
 
-    void syncOutbox()
+    void runSync()
   }
 
   const handleDeleteRecurringRule = async (rule: RecurringRule) => {
@@ -1021,7 +1068,7 @@ function App() {
       created_at: new Date().toISOString(),
     })
 
-    void syncOutbox()
+    void runSync()
   }
 
   const handleAddRecurringRule = async (rule: {
@@ -1308,6 +1355,12 @@ function App() {
       </div>
 
       {menuOpen && <div className="backdrop" onClick={() => setMenuOpen(false)} />}
+
+      {toast && (
+        <div className={`toast ${toast.type}`} role="status" aria-live="polite">
+          {toast.message}
+        </div>
+      )}
     </div>
   )
 }

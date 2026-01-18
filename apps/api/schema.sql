@@ -147,6 +147,18 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions (expires_at);
 CREATE INDEX IF NOT EXISTS idx_invites_family ON invites (family_id);
 CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states (expires_at);
 
+CREATE TABLE IF NOT EXISTS change_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  family_id TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  payload TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_change_logs_family_id ON change_logs (family_id, id);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,
   family_id TEXT NOT NULL,

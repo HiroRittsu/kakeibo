@@ -42,6 +42,15 @@ type AllowedUserRow = {
   updated_at: string
 }
 
+type ChangeLogRow = {
+  id: number
+  entity_type: string
+  entity_id: string
+  action: string
+  payload: string | null
+  created_at: string
+}
+
 type Variables = {
   session?: SessionRow | null
 }
@@ -563,16 +572,21 @@ const recalcMonthlyBalances = async (db: D1Database, familyId: string, startYm: 
       .first<MonthlyBalanceRow>()
     const isClosed = existing?.is_closed === 1 ? 1 : 0
     const updatedAt = nowIso()
+    const roundedBalance = Math.round(balance)
 
     await db
       .prepare(
         'INSERT INTO monthly_balance (family_id, ym, balance, is_closed, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(family_id, ym) DO UPDATE SET balance = excluded.balance, is_closed = ?, updated_at = excluded.updated_at'
       )
-      .bind(familyId, ym, Math.round(balance), isClosed, updatedAt, isClosed)
+      .bind(familyId, ym, roundedBalance, isClosed, updatedAt, isClosed)
       .run()
 
-    updates.push({ ym, balance, is_closed: isClosed })
-    previousBalance = balance
+    await recordChange(db, familyId, 'monthly_balance', ym, 'upsert', {
+      monthly_balance: { ym, balance: roundedBalance, is_closed: isClosed, updated_at: updatedAt },
+    })
+
+    updates.push({ ym, balance: roundedBalance, is_closed: isClosed })
+    previousBalance = roundedBalance
   }
 
   return updates
@@ -695,6 +709,22 @@ const generateRecurringEntries = async (db: D1Database, baseDate = new Date()) =
     const changes = (result as { meta?: { changes?: number } }).meta?.changes ?? 0
     if (changes > 0) {
       await recordAudit(db, rule.family_id, 'system', 'create', 'entries', id, `recurring ${rule.id}`)
+      await recordChange(db, rule.family_id, 'entries', id, 'upsert', {
+        entry: {
+          id,
+          family_id: rule.family_id,
+          entry_type: rule.entry_type,
+          amount: Math.round(rule.amount),
+          entry_category_id: rule.entry_category_id,
+          payment_method_id: rule.payment_method_id,
+          memo: rule.memo,
+          occurred_at: occurredAt,
+          occurred_on: targetDate,
+          recurring_rule_id: rule.id,
+          created_at: createdAt,
+          updated_at: updatedAt,
+        },
+      })
       const existing = affectedFamilies.get(rule.family_id)
       if (!existing || ymToIndex(targetYm) < ymToIndex(existing)) {
         affectedFamilies.set(rule.family_id, targetYm)
@@ -738,7 +768,60 @@ const recordAudit = async (
     .run()
 }
 
+const recordChange = async (
+  db: D1Database,
+  familyId: string,
+  entityType: string,
+  entityId: string,
+  action: 'upsert' | 'delete',
+  payload?: Record<string, unknown> | null
+) => {
+  const createdAt = nowIso()
+  await db
+    .prepare(
+      'INSERT INTO change_logs (family_id, entity_type, entity_id, action, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+    )
+    .bind(familyId, entityType, entityId, action, payload ? JSON.stringify(payload) : null, createdAt)
+    .run()
+}
+
 app.get('/health', (c) => c.json({ ok: true }))
+
+app.get('/sync', async (c) => {
+  const familyId = requireFamilyId(c)
+  if (!familyId) return c.json(jsonError('Unauthorized', 401), 401)
+
+  const cursor = Math.max(0, Number(c.req.query('cursor') ?? 0))
+  const limit = Math.max(0, Math.min(500, Number(c.req.query('limit') ?? 200)))
+  const serverTime = nowIso()
+
+  if (limit === 0) {
+    const latest = await c.env.DB
+      .prepare('SELECT MAX(id) as max_id FROM change_logs WHERE family_id = ?')
+      .bind(familyId)
+      .first<{ max_id?: number | null }>()
+    const nextCursor = typeof latest?.max_id === 'number' ? latest.max_id : cursor
+    return c.json({ changes: [], next_cursor: nextCursor, server_time: serverTime })
+  }
+
+  const { results } = await c.env.DB
+    .prepare(
+      'SELECT id, entity_type, entity_id, action, payload, created_at FROM change_logs WHERE family_id = ? AND id > ? ORDER BY id ASC LIMIT ?'
+    )
+    .bind(familyId, cursor, limit)
+    .all<ChangeLogRow>()
+
+  const changes = (results ?? []).map((row) => ({
+    id: row.id,
+    entity_type: row.entity_type,
+    entity_id: row.entity_id,
+    action: row.action,
+    payload: row.payload ? JSON.parse(row.payload) : null,
+    created_at: row.created_at,
+  }))
+  const nextCursor = changes.length ? changes[changes.length - 1].id : cursor
+  return c.json({ changes, next_cursor: nextCursor, server_time: serverTime })
+})
 
 app.get('/entries', async (c) => {
   const familyId = requireFamilyId(c)
@@ -833,6 +916,10 @@ app.post('/entries', async (c) => {
     .bind(id, familyId)
     .first()
 
+  if (entry) {
+    await recordChange(db, familyId, 'entries', id, 'upsert', { entry })
+  }
+
   return c.json({ entry, conflict })
 })
 
@@ -900,6 +987,10 @@ app.patch('/entries/:id', async (c) => {
     .bind(id, familyId)
     .first()
 
+  if (entry) {
+    await recordChange(db, familyId, 'entries', id, 'upsert', { entry })
+  }
+
   return c.json({ entry, conflict })
 })
 
@@ -917,6 +1008,7 @@ app.delete('/entries/:id', async (c) => {
 
   await db.prepare('DELETE FROM entries WHERE id = ? AND family_id = ?').bind(id, familyId).run()
   await recordAudit(db, familyId, getActorUserId(c), 'delete', 'entries', id)
+  await recordChange(db, familyId, 'entries', id, 'delete', { id })
 
   if (existing?.occurred_on) {
     const startYm = getYmFromDate(existing.occurred_on)
@@ -969,6 +1061,10 @@ app.post('/entry-categories', async (c) => {
     .bind(id, familyId)
     .first()
 
+  if (entryCategory) {
+    await recordChange(c.env.DB, familyId, 'entry_categories', id, 'upsert', { entry_category: entryCategory })
+  }
+
   return c.json({ entry_category: entryCategory })
 })
 
@@ -979,6 +1075,7 @@ app.delete('/entry-categories/:id', async (c) => {
   const id = c.req.param('id')
   await c.env.DB.prepare('DELETE FROM entry_categories WHERE id = ? AND family_id = ?').bind(id, familyId).run()
   await recordAudit(c.env.DB, familyId, getActorUserId(c), 'delete', 'entry_categories', id)
+  await recordChange(c.env.DB, familyId, 'entry_categories', id, 'delete', { id })
   return c.json({ ok: true })
 })
 
@@ -1023,6 +1120,10 @@ app.post('/payment-methods', async (c) => {
     .bind(id, familyId)
     .first()
 
+  if (paymentMethod) {
+    await recordChange(c.env.DB, familyId, 'payment_methods', id, 'upsert', { payment_method: paymentMethod })
+  }
+
   return c.json({ payment_method: paymentMethod })
 })
 
@@ -1033,6 +1134,7 @@ app.delete('/payment-methods/:id', async (c) => {
   const id = c.req.param('id')
   await c.env.DB.prepare('DELETE FROM payment_methods WHERE id = ? AND family_id = ?').bind(id, familyId).run()
   await recordAudit(c.env.DB, familyId, getActorUserId(c), 'delete', 'payment_methods', id)
+  await recordChange(c.env.DB, familyId, 'payment_methods', id, 'delete', { id })
   return c.json({ ok: true })
 })
 
@@ -1104,6 +1206,10 @@ app.post('/recurring-rules', async (c) => {
     .bind(id, familyId)
     .first()
 
+  if (recurringRule) {
+    await recordChange(c.env.DB, familyId, 'recurring_rules', id, 'upsert', { recurring_rule: recurringRule })
+  }
+
   return c.json({ recurring_rule: recurringRule })
 })
 
@@ -1114,6 +1220,7 @@ app.delete('/recurring-rules/:id', async (c) => {
   const id = c.req.param('id')
   await c.env.DB.prepare('DELETE FROM recurring_rules WHERE id = ? AND family_id = ?').bind(id, familyId).run()
   await recordAudit(c.env.DB, familyId, getActorUserId(c), 'delete', 'recurring_rules', id)
+  await recordChange(c.env.DB, familyId, 'recurring_rules', id, 'delete', { id })
   return c.json({ ok: true })
 })
 

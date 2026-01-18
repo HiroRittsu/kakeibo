@@ -137,6 +137,8 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
   - 主な項目: id, user_id, family_id, is_pending, expires_at
 - oauth_states: OAuthの一時状態。
   - 主な項目: id, next_path, origin, expires_at
+- change_logs: 同期用の変更ログ（cursorベース）。
+  - 主な項目: id, family_id, entity_type, entity_id, action, payload, created_at
 - audit_logs: 共有編集ログ（誰が何をしたか）。
   - 主な項目: id, family_id, actor_user_id, action, target_type, target_id
   - 付随項目: summary, created_at
@@ -173,11 +175,12 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
 │  ├─ 有効
 │  │  ├─ IndexedDBキャッシュ読込（entries / monthlyBalances など） -> 画面表示
 │  │  └─ 初回同期:
-│  │     ├─ GET /entries（last_syncなしならフルフェッチ）
+│  │     ├─ GET /entries（フルフェッチ）
 │  │     ├─ GET /entry-categories
 │  │     ├─ GET /payment-methods
 │  │     ├─ GET /recurring-rules
-│  │     └─ GET /monthly-balances?from=YYYY-MM&to=YYYY-MM
+│  │     ├─ GET /monthly-balances?from=YYYY-MM&to=YYYY-MM
+│  │     └─ GET /sync?cursor=0&limit=0（カーソル確定）
 │  └─ 無効/なし
 │     ├─ オンライン -> Google OAuth（ホワイトリスト確認） -> セッション -> キャッシュ読込 -> 初回同期
 │     └─ オフライン -> オフラインモードUI -> ローカル編集のみ許可
@@ -225,16 +228,12 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
 ├─ 競合判定（updated_at）
 │  └─ 警告フラグのみ返却（同一IDは最新更新で上書き）
 ├─ サーバー側で編集ログを記録
-├─ 差分取得: GET /entries?since=last_sync
-   └─ IndexedDBにマージ -> 画面更新
-├─ GET /entry-categories
-├─ GET /payment-methods
-├─ GET /recurring-rules
-└─ 月次残高取得: GET /monthly-balances?from=YYYY-MM&to=YYYY-MM
-   └─ IndexedDBに保存（monthlyBalances）
+└─ 差分取得: GET /sync?cursor=last_cursor（ループで取得）
+   ├─ IndexedDBにマージ -> 画面更新
+   └─ server_time を last_sync に保存
 │
 ポーリング（任意）
-└─ GET /entries?since=last_sync（未設定ならフルフェッチ）-> マージ -> 画面更新
+└─ GET /sync?cursor=last_cursor -> マージ -> 画面更新
 │
 レポート表示
 └─ IndexedDB（entries + monthlyBalances）で集計/グラフ表示
@@ -274,10 +273,14 @@ apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name
   - 入力: `code`, `state`
   - 出力: Cookie発行 + アプリへ302（拒否時は `auth_error` 付与）
 - `GET /entries`
-  - 目的: 明細の同期（差分/全量）
-  - 入力: `since`（任意）
+  - 目的: 初回同期の全量取得
+  - 入力: なし
   - 出力: `entries[]`
-  - クライアント: IndexedDBへ保存、`last_sync`更新
+- `GET /sync?cursor=...`
+  - 目的: 変更ログの差分取得（削除含む）
+  - 入力: `cursor` / `limit`（任意）
+  - 出力: `changes[]`, `next_cursor`, `server_time`
+  - クライアント: IndexedDBへマージ、`last_sync`更新、`cursor`保存
 - `POST /entries`
   - 目的: 新規明細の作成
   - 入力: 明細JSON

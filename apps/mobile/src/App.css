@@ -1546,6 +1546,31 @@ select {
   font-size: 22px;
 }
 
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 72px;
+  transform: translateX(-50%);
+  background: #333;
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  text-align: center;
+  max-width: calc(100% - 32px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  z-index: 30;
+  pointer-events: none;
+}
+
+.toast.error {
+  background: #c0392b;
+}
+
+.toast.info {
+  background: #333;
+}
+
 
 .backdrop {
   position: fixed;
