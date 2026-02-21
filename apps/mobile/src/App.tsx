@@ -3,7 +3,7 @@ import dayjs from 'dayjs'
 import { useLiveQuery } from 'dexie-react-hooks'
 import './App.css'
 import { db } from './db'
-import { apiFetch, getApiBaseUrl, getFamilyId, setIdentity } from './lib/api'
+import { apiFetch, getApiBaseUrl, getFamilyId, getUserId, setIdentity } from './lib/api'
 import { enqueueOutbox, getRecentSyncEvents, syncOutbox, type SyncFailure } from './lib/sync'
 import type {
   Entry,
@@ -25,6 +25,8 @@ type PageKey =
   | 'recurring-settings'
   | 'other-settings'
   | 'payment-settings'
+  | 'report-category-entities'
+  | 'payment-method-entities'
 
 type PaymentType = 'cash' | 'bank' | 'emoney' | 'card'
 type HolidayAdjustment = 'none' | 'previous' | 'next'
@@ -45,6 +47,25 @@ type EntryInputSeed = {
   createdAt?: string
   updatedAt?: string
   recurringRuleId?: string | null
+  createdByUserId?: string | null
+  createdByUserName?: string | null
+  createdByAvatarUrl?: string | null
+}
+
+type ReportCategoryEntitySeed = {
+  categoryId: string
+  categoryName: string
+  categoryColor?: string | null
+  iconKey?: string | null
+  rangeLabel: string
+  entryType: EntryType
+  fromDate: string
+  toDateExclusive: string
+}
+
+type PaymentMethodEntitySeed = {
+  methodId: string
+  methodName: string
 }
 
 type AuthSession = {
@@ -109,6 +130,7 @@ const CARRYOVER_CATEGORY_ID = 'carryover'
 const SESSION_CHECK_TIMEOUT_MS = 7000
 const BACKGROUND_SESSION_CHECK_TIMEOUT_MS = 2500
 const AUTH_CACHE_KEY = 'auth_session_cache'
+const APP_VERSION = (import.meta.env.VITE_APP_VERSION as string | undefined)?.trim() || 'dev'
 const buildMonthlyBalanceId = (familyId: string, ym: string) => `${familyId}:${ym}`
 
 const loadCachedAuthIdentity = (): CachedAuthIdentity | null => {
@@ -249,6 +271,8 @@ const PAGE_TITLES: Record<PageKey, string> = {
   'recurring-settings': '定期的な収入/支出',
   'other-settings': '支払い設定',
   'payment-settings': '支払い方法',
+  'report-category-entities': 'カテゴリ明細',
+  'payment-method-entities': '支払い明細',
 }
 
 const PAYMENT_TITLES: Record<PaymentType, string> = {
@@ -446,6 +470,28 @@ const CATEGORY_ICON_CHOICES = [
   'settings',
 ]
 
+const PAYMENT_ICON_CHOICES = [
+  'payments',
+  'account_balance_wallet',
+  'account_balance',
+  'credit_card',
+  'paid',
+  'savings',
+  'point_of_sale',
+  'receipt_long',
+  'price_check',
+  'qr_code',
+  'currency_yen',
+  'sell',
+]
+
+const PAYMENT_DEFAULT_COLORS: Record<PaymentType, string> = {
+  cash: '#8a6b55',
+  bank: '#2f6db4',
+  emoney: '#2f8f9d',
+  card: '#3a4bb8',
+}
+
 const renderMaterialIcon = (name: string, className?: string) => (
   <span className={['material-symbols-outlined', className].filter(Boolean).join(' ')}>{name}</span>
 )
@@ -455,12 +501,30 @@ const getCategoryIcon = (iconKey?: string | null) => {
   return renderMaterialIcon(iconKey)
 }
 
+const getPaymentType = (type: string): PaymentType => {
+  if (type === 'bank' || type === 'emoney' || type === 'card' || type === 'cash') return type
+  return 'cash'
+}
+
+const getPaymentFallbackIconKey = (type: string) => {
+  if (type === 'bank') return 'account_balance'
+  if (type === 'emoney') return 'account_balance_wallet'
+  if (type === 'card') return 'credit_card'
+  return 'payments'
+}
+
+const getPaymentIconFromConfig = (type: string, iconKey?: string | null) => {
+  const normalizedIconKey = typeof iconKey === 'string' && iconKey.trim() ? iconKey.trim() : null
+  return renderMaterialIcon(normalizedIconKey ?? getPaymentFallbackIconKey(type))
+}
+
+const getPaymentColor = (method?: PaymentMethod | null) => {
+  if (!method) return PAYMENT_DEFAULT_COLORS.cash
+  return method.color ?? PAYMENT_DEFAULT_COLORS[getPaymentType(method.type)]
+}
+
 const getPaymentIcon = (method?: PaymentMethod | null) => {
-  if (!method) return renderMaterialIcon('payments')
-  if (method.type === 'bank') return renderMaterialIcon('account_balance')
-  if (method.type === 'emoney') return renderMaterialIcon('account_balance_wallet')
-  if (method.type === 'card') return renderMaterialIcon('credit_card')
-  return renderMaterialIcon('payments')
+  return getPaymentIconFromConfig(method?.type ?? 'cash', method?.icon_key ?? null)
 }
 
 const buildCalendar = (month: dayjs.Dayjs, totals: Map<string, DayTotals>) => {
@@ -688,6 +752,14 @@ const paymentMethodLabel = (methods: PaymentMethod[], id: string | null) => {
   return methods.find((method) => method.id === id)?.name ?? '未設定'
 }
 
+const paymentTypeLabel = (type: string) => {
+  if (type === 'cash') return '現金'
+  if (type === 'bank') return '銀行'
+  if (type === 'emoney') return '電子マネー'
+  if (type === 'card') return 'クレジット'
+  return '支払い'
+}
+
 const splitMemo = (value: string | null) => {
   if (!value) return { place: '', memo: '' }
   const parts = value.split(' / ')
@@ -851,9 +923,12 @@ function App() {
   const [syncFailure, setSyncFailure] = useState<SyncFailure | null>(null)
   const [authStatus, setAuthStatus] = useState<'loading' | 'logged-out' | 'ready'>('loading')
   const [authError, setAuthError] = useState<string | null>(null)
+  const [currentUser, setCurrentUser] = useState<AuthSession['user'] | null>(null)
   const [isOfflineAuthMode, setIsOfflineAuthMode] = useState(false)
   const [isSessionVerified, setIsSessionVerified] = useState(false)
   const [historyMonthYm, setHistoryMonthYm] = useState(() => dayjs().format('YYYY-MM'))
+  const [reportCategorySeed, setReportCategorySeed] = useState<ReportCategoryEntitySeed | null>(null)
+  const [paymentMethodSeed, setPaymentMethodSeed] = useState<PaymentMethodEntitySeed | null>(null)
   const toastTimerRef = useRef<number | null>(null)
   const sessionCheckInFlightRef = useRef<Promise<boolean> | null>(null)
 
@@ -945,6 +1020,7 @@ function App() {
             setAuthError(unauthenticatedError)
           }
           clearCachedAuthIdentity()
+          setCurrentUser(null)
           setIsSessionVerified(false)
           setIsOfflineAuthMode(false)
           setAuthStatus('logged-out')
@@ -957,6 +1033,7 @@ function App() {
             setAuthError(unauthenticatedError)
           }
           clearCachedAuthIdentity()
+          setCurrentUser(null)
           setIsSessionVerified(false)
           setIsOfflineAuthMode(false)
           setAuthStatus('logged-out')
@@ -964,6 +1041,7 @@ function App() {
         }
 
         setIdentity(data.session.family_id, data.session.user.id)
+        setCurrentUser(data.session.user)
         saveCachedAuthIdentity(data.session.family_id, data.session.user.id)
         setIsSessionVerified(true)
         setIsOfflineAuthMode(false)
@@ -985,6 +1063,7 @@ function App() {
         } else if (!navigator.onLine) {
           setAuthError('オフラインです。オンラインで一度ログインしてください。')
         }
+        setCurrentUser(null)
         setIsSessionVerified(false)
         setIsOfflineAuthMode(false)
         setAuthStatus('logged-out')
@@ -1024,6 +1103,7 @@ function App() {
       showToast(formatSyncFailureMessage(result.failure))
       if (result.failure.auth_required) {
         clearCachedAuthIdentity()
+        setCurrentUser(null)
         setIsSessionVerified(false)
         setAuthError('セッションが切れました。再ログインしてください。')
         setIsOfflineAuthMode(false)
@@ -1193,8 +1273,11 @@ function App() {
     setPaymentReturnPage('main')
     setReturnTab('home')
     setEntrySeed(null)
+    setReportCategorySeed(null)
+    setPaymentMethodSeed(null)
     setPreferredEntryType('expense')
     setHistoryMonthYm(dayjs().format('YYYY-MM'))
+    setCurrentUser(null)
     setIsOfflineAuthMode(false)
     setIsSessionVerified(false)
     setAuthError(null)
@@ -1216,6 +1299,12 @@ function App() {
       occurred_at: payload.occurredAt,
       occurred_on: occurredOn,
       recurring_rule_id: existing?.recurring_rule_id ?? payload.recurringRuleId ?? null,
+      created_by_user_id:
+        existing?.created_by_user_id ?? payload.createdByUserId ?? currentUser?.id ?? getUserId(),
+      created_by_user_name:
+        existing?.created_by_user_name ?? payload.createdByUserName ?? currentUser?.name ?? null,
+      created_by_avatar_url:
+        existing?.created_by_avatar_url ?? payload.createdByAvatarUrl ?? currentUser?.avatar_url ?? null,
       created_at: existing?.created_at ?? payload.createdAt ?? now,
       updated_at: now,
     }
@@ -1334,18 +1423,9 @@ function App() {
     void runSync()
   }
 
-  const handleAddPaymentMethod = async (name: string, type: string) => {
-    const now = new Date().toISOString()
-    const method: PaymentMethod = {
-      id: crypto.randomUUID(),
-      family_id: getFamilyId(),
-      name,
-      type,
-      sort_order: (paymentMethods?.length ?? 0) + 1,
-      created_at: now,
-      updated_at: now,
-    }
-
+  const handleSavePaymentMethod = async (method: PaymentMethod) => {
+    const existing = await db.paymentMethods.get(method.id)
+    const baseUpdatedAt = existing?.updated_at ?? null
     await db.paymentMethods.put(method)
     await enqueueOutbox({
       method: 'POST',
@@ -1354,17 +1434,37 @@ function App() {
         id: method.id,
         name: method.name,
         type: method.type,
+        icon_key: method.icon_key ?? null,
+        color: method.color ?? null,
         sort_order: method.sort_order,
-        base_updated_at: null,
+        base_updated_at: baseUpdatedAt,
       },
-      created_at: now,
+      created_at: new Date().toISOString(),
       entity_type: 'payment_methods',
       entity_id: method.id,
       operation: 'upsert',
-      base_updated_at: null,
+      base_updated_at: baseUpdatedAt,
     })
 
     void runSync()
+  }
+
+  const handleAddPaymentMethod = async (name: string, type: string) => {
+    const now = new Date().toISOString()
+    const normalizedType = getPaymentType(type)
+    const method: PaymentMethod = {
+      id: crypto.randomUUID(),
+      family_id: getFamilyId(),
+      name,
+      type: normalizedType,
+      icon_key: getPaymentFallbackIconKey(normalizedType),
+      color: PAYMENT_DEFAULT_COLORS[normalizedType],
+      sort_order: (paymentMethods?.length ?? 0) + 1,
+      created_at: now,
+      updated_at: now,
+    }
+
+    await handleSavePaymentMethod(method)
   }
 
   const handleDeletePaymentMethod = async (method: PaymentMethod) => {
@@ -1486,9 +1586,33 @@ function App() {
     setMenuOpen(false)
   }
 
+  const handleOpenReportCategoryEntities = (seed: ReportCategoryEntitySeed) => {
+    setReturnPage('main')
+    setReportCategorySeed(seed)
+    setPage('report-category-entities')
+    setMenuOpen(false)
+  }
+
+  const handleOpenPaymentMethodEntities = (seed: PaymentMethodEntitySeed) => {
+    setReturnPage('balance')
+    setPaymentMethodSeed(seed)
+    setPage('payment-method-entities')
+    setMenuOpen(false)
+  }
+
   const handleBack = () => {
     if (page === 'payment-settings') {
       setPage(paymentReturnPage)
+      return
+    }
+    if (page === 'report-category-entities') {
+      setReportCategorySeed(null)
+      setPage(returnPage)
+      return
+    }
+    if (page === 'payment-method-entities') {
+      setPaymentMethodSeed(null)
+      setPage(returnPage)
       return
     }
     if (page === 'entry-input') {
@@ -1511,6 +1635,10 @@ function App() {
       ? entryInputTitle
       : page === 'payment-settings'
         ? PAYMENT_TITLES[paymentType]
+        : page === 'report-category-entities'
+          ? reportCategorySeed?.categoryName ?? PAGE_TITLES[page]
+          : page === 'payment-method-entities'
+            ? paymentMethodSeed?.methodName ?? PAGE_TITLES[page]
         : page === 'main'
           ? TAB_LABELS[activeTab]
           : PAGE_TITLES[page]
@@ -1634,6 +1762,9 @@ function App() {
                   createdAt: entry.created_at,
                   updatedAt: entry.updated_at,
                   recurringRuleId: entry.recurring_rule_id,
+                  createdByUserId: entry.created_by_user_id ?? null,
+                  createdByUserName: entry.created_by_user_name ?? null,
+                  createdByAvatarUrl: entry.created_by_avatar_url ?? null,
                 },
                 'history'
               )
@@ -1645,6 +1776,7 @@ function App() {
             entries={entries ?? []}
             categories={entryCategories ?? []}
             monthlyBalanceMap={monthlyBalanceMap}
+            onOpenCategoryEntities={handleOpenReportCategoryEntities}
           />
         )}
         {page === 'balance' && (
@@ -1653,6 +1785,7 @@ function App() {
             monthlyBalanceMap={monthlyBalanceMap}
             paymentMethods={paymentMethods ?? []}
             onOpenPayment={handleOpenPayment}
+            onOpenPaymentMethodEntities={handleOpenPaymentMethodEntities}
           />
         )}
         {page === 'entry-input' && entrySeed && (
@@ -1700,14 +1833,34 @@ function App() {
             paymentType={paymentType}
             paymentMethods={paymentMethods ?? []}
             onAdd={handleAddPaymentMethod}
+            onSave={handleSavePaymentMethod}
             onDelete={handleDeletePaymentMethod}
+          />
+        )}
+        {page === 'report-category-entities' && reportCategorySeed && (
+          <ReportCategoryEntitiesPage
+            seed={reportCategorySeed}
+            entries={entries ?? []}
+            categoryMap={categoryMap}
+            paymentMethods={paymentMethods ?? []}
+          />
+        )}
+        {page === 'payment-method-entities' && paymentMethodSeed && (
+          <PaymentMethodEntitiesPage
+            seed={paymentMethodSeed}
+            entries={entries ?? []}
+            categoryMap={categoryMap}
+            paymentMethods={paymentMethods ?? []}
           />
         )}
       </main>
 
       <div className={`side-menu ${menuOpen ? 'open' : ''}`}>
         <div className="menu-brand">
-          <strong>Kakeibo</strong>
+          <div className="menu-brand-row">
+            <strong>Kakeibo</strong>
+            <span className="menu-version">v{APP_VERSION}</span>
+          </div>
         </div>
         <div className="menu-list">
           <MenuItem icon={<IconFolder />} label="カテゴリ設定" onClick={() => handleOpenPage('category-settings')} />
@@ -1918,6 +2071,7 @@ const EntryInputPage = ({
   const [operationUsed, setOperationUsed] = useState(false)
   const [awaitingSubmit, setAwaitingSubmit] = useState(false)
   const [showCategorySheet, setShowCategorySheet] = useState(false)
+  const [showPaymentSheet, setShowPaymentSheet] = useState(false)
   const [categorySheetType, setCategorySheetType] = useState<EntryType>(seed.entryType)
 
   const categoriesByType = useMemo(
@@ -2036,21 +2190,17 @@ const EntryInputPage = ({
       createdAt: seed.createdAt,
       updatedAt: seed.updatedAt,
       recurringRuleId: seed.recurringRuleId ?? null,
+      createdByUserId: seed.createdByUserId ?? null,
+      createdByUserName: seed.createdByUserName ?? null,
+      createdByAvatarUrl: seed.createdByAvatarUrl ?? null,
     })
   }
 
   const baseLabel = isEditing ? '編集' : '入力'
   const primaryLabel = operationUsed && !awaitingSubmit ? '=' : baseLabel
 
-  const handleCyclePaymentMethod = () => {
-    if (!paymentMethods.length) return
-    const currentIndex = paymentMethods.findIndex((method) => method.id === paymentMethodId)
-    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % paymentMethods.length : 0
-    setPaymentMethodId(paymentMethods[nextIndex].id)
-  }
-
-  const paymentLabel =
-    paymentMethods.find((method) => method.id === paymentMethodId)?.name ?? '支払い方法'
+  const selectedPaymentMethod = paymentMethods.find((method) => method.id === paymentMethodId) ?? null
+  const paymentLabel = selectedPaymentMethod?.name ?? '支払い方法を選択'
 
   const handleApplyEntryType = (nextType: EntryType) => {
     setEntryType(nextType)
@@ -2072,6 +2222,11 @@ const EntryInputPage = ({
     setEntryCategoryId(nextCategoryId ?? '')
     setCategorySheetType(nextType)
     setShowCategorySheet(false)
+  }
+
+  const handlePickPaymentMethod = (nextPaymentMethodId: string | null) => {
+    setPaymentMethodId(nextPaymentMethodId ?? '')
+    setShowPaymentSheet(false)
   }
 
   return (
@@ -2173,7 +2328,7 @@ const EntryInputPage = ({
       </div>
 
       <div className={`entry-actions ${isEditing ? 'editing' : ''}`}>
-        <button type="button" className="entry-method" onClick={handleCyclePaymentMethod}>
+        <button type="button" className="entry-method" onClick={() => setShowPaymentSheet(true)}>
           {paymentLabel}
         </button>
         {isEditing && (
@@ -2266,6 +2421,71 @@ const EntryInputPage = ({
             </ul>
             <div className="sheet-actions">
               <button type="button" className="ghost" onClick={() => setShowCategorySheet(false)}>
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPaymentSheet && (
+        <div
+          className="sheet"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setShowPaymentSheet(false)
+            }
+          }}
+        >
+          <div className="sheet-card entry-payment-sheet" role="dialog" aria-modal="true" aria-label="支払い方法選択">
+            <h3>支払い方法選択</h3>
+            <ul className="entry-payment-options">
+              <li>
+                <button
+                  type="button"
+                  className={`entry-payment-option ${!paymentMethodId ? 'active' : ''}`}
+                  onClick={() => handlePickPaymentMethod(null)}
+                >
+                  <span
+                    className="entry-payment-option-icon"
+                    style={{ background: PAYMENT_DEFAULT_COLORS.cash, color: '#fff' }}
+                  >
+                    {renderMaterialIcon('payments')}
+                  </span>
+                  <span className="entry-payment-option-text">
+                    <strong>未設定</strong>
+                    <span>支払い方法を設定しない</span>
+                  </span>
+                  <span className="entry-payment-option-check">{!paymentMethodId ? renderMaterialIcon('check') : null}</span>
+                </button>
+              </li>
+              {paymentMethods.map((method) => {
+                const isActive = method.id === paymentMethodId
+                return (
+                  <li key={method.id}>
+                    <button
+                      type="button"
+                      className={`entry-payment-option ${isActive ? 'active' : ''}`}
+                      onClick={() => handlePickPaymentMethod(method.id)}
+                    >
+                      <span
+                        className="entry-payment-option-icon"
+                        style={{ background: getPaymentColor(method), color: '#fff' }}
+                      >
+                        {getPaymentIcon(method)}
+                      </span>
+                      <span className="entry-payment-option-text">
+                        <strong>{method.name}</strong>
+                        <span>{paymentTypeLabel(method.type)}</span>
+                      </span>
+                      <span className="entry-payment-option-check">{isActive ? renderMaterialIcon('check') : null}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+            <div className="sheet-actions">
+              <button type="button" className="ghost" onClick={() => setShowPaymentSheet(false)}>
                 閉じる
               </button>
             </div>
@@ -2529,12 +2749,15 @@ const HistoryTab = ({
     const method = !isCarryover && entry.payment_method_id ? paymentMap.get(entry.payment_method_id) : null
     const memoValue = !isCarryover ? entry.memo?.trim() : null
     const paymentClass = method?.type === 'card' ? 'credit-card' : method?.type ?? 'unknown'
+    const paymentOverlayStyle = method ? { background: getPaymentColor(method), color: '#fff' } : undefined
     const categoryColor = isCarryover ? '#8f9499' : category?.color ?? '#d9554c'
     const categoryIcon = isCarryover ? renderMaterialIcon('redo') : getCategoryIcon(category?.icon_key)
     const categoryFallback = category?.name?.slice(0, 1) ?? '?'
     const categoryLabel = isCarryover ? '繰越し' : category?.name ?? '未分類'
     const isPlanned = Boolean(entry.is_planned)
     const isRecurring = Boolean(entry.recurring_rule_id)
+    const creatorAvatarUrl = entry.created_by_avatar_url?.trim() ?? ''
+    const creatorName = entry.created_by_user_name?.trim() ?? ''
     const amountPrefix = isPlanned ? (entry.entry_type === 'income' ? '+' : '-') : ''
 
     return (
@@ -2548,8 +2771,23 @@ const HistoryTab = ({
         <div className="entry-row-main">
           <span className="entry-category-icon" style={{ background: categoryColor }}>
             {categoryIcon ?? <span className="category-fallback">{categoryFallback}</span>}
+            {!isCarryover && !isPlanned && (
+              <span
+                className="entry-creator-overlay"
+                title={creatorName || 'Googleユーザー'}
+                aria-label={creatorName || 'Googleユーザー'}
+              >
+                {creatorAvatarUrl ? (
+                  <img src={creatorAvatarUrl} alt={creatorName ? `${creatorName} のGoogleアイコン` : 'Googleアイコン'} />
+                ) : (
+                  <img src="/icons/google-g.svg" alt="Googleアイコン" />
+                )}
+              </span>
+            )}
             {!isCarryover && (
-              <span className={`entry-payment-overlay ${paymentClass}`}>{getPaymentIcon(method)}</span>
+              <span className={`entry-payment-overlay ${paymentClass}`} style={paymentOverlayStyle}>
+                {getPaymentIcon(method)}
+              </span>
             )}
           </span>
           <div className="entry-info">
@@ -2725,9 +2963,10 @@ type ReportsTabProps = {
   entries: Entry[]
   categories: EntryCategory[]
   monthlyBalanceMap: Map<string, MonthlyBalance>
+  onOpenCategoryEntities: (seed: ReportCategoryEntitySeed) => void
 }
 
-const ReportsTab = ({ entries, categories, monthlyBalanceMap }: ReportsTabProps) => {
+const ReportsTab = ({ entries, categories, monthlyBalanceMap, onOpenCategoryEntities }: ReportsTabProps) => {
   const [range, setRange] = useState<'week' | 'month' | 'year'>('month')
   const [reportType, setReportType] = useState<EntryType>('expense')
   const [reportOffset, setReportOffset] = useState(0)
@@ -2805,7 +3044,7 @@ const ReportsTab = ({ entries, categories, monthlyBalanceMap }: ReportsTabProps)
     const stops = donutSegments.map((item, index) => {
       const percent = activeTotal ? (item.total / activeTotal) * 100 : 0
       const end = start + percent
-      const color = CATEGORY_COLORS[index % CATEGORY_COLORS.length]
+      const color = item.color ?? CATEGORY_COLORS[index % CATEGORY_COLORS.length]
       const stop = `${color} ${start}% ${end}%`
       start = end
       return stop
@@ -2875,25 +3114,47 @@ const ReportsTab = ({ entries, categories, monthlyBalanceMap }: ReportsTabProps)
           {categoryTotals.length === 0 && <li>データがありません</li>}
           {categoryTotals.map((item, index) => {
             const percent = activeTotal ? Math.round((item.total / activeTotal) * 100) : 0
-            const color = CATEGORY_COLORS[index % CATEGORY_COLORS.length]
+            const color = item.color ?? CATEGORY_COLORS[index % CATEGORY_COLORS.length]
             return (
-              <li key={item.id}>
-                <div className="entry-main">
-                  <span className="mini-icon" style={{ background: color }}>
-                    {getCategoryIcon(item.icon_key) ?? item.name.slice(0, 1)}
-                  </span>
-                  <strong>{item.name}</strong>
-                </div>
-                <div className="progress-row">
-                  <span>¥{formatAmount(item.total)} ({percent}%)</span>
-                  <div className="progress">
-                    <span style={{ width: `${percent}%`, background: color }} />
+              <li key={item.id} className="report-category-item">
+                <button
+                  type="button"
+                  className="report-category-row"
+                  aria-label={`${item.name}の明細`}
+                  onClick={() =>
+                    onOpenCategoryEntities({
+                      categoryId: item.id,
+                      categoryName: item.name,
+                      categoryColor: item.color ?? color,
+                      iconKey: item.icon_key ?? null,
+                      rangeLabel: rangeInfo.label,
+                      entryType: reportType,
+                      fromDate: rangeInfo.apiFrom,
+                      toDateExclusive: rangeInfo.apiTo,
+                    })
+                  }
+                >
+                  <div className="report-category-main">
+                    <div className="entry-main">
+                      <span className="mini-icon" style={{ background: color }}>
+                        {getCategoryIcon(item.icon_key) ?? item.name.slice(0, 1)}
+                      </span>
+                      <strong>{item.name}</strong>
+                    </div>
+                    <span className="report-category-arrow" aria-hidden="true">
+                      ›
+                    </span>
                   </div>
-                </div>
-                <span className="chevron">›</span>
+                  <div className="progress-row report-category-progress">
+                    <span>¥{formatAmount(item.total)} ({percent}%)</span>
+                    <div className="progress">
+                      <span style={{ width: `${percent}%`, background: color }} />
+                    </div>
+                  </div>
+                </button>
               </li>
-            )}
-          )}
+            )
+          })}
         </ul>
       </div>
 
@@ -2906,14 +3167,16 @@ type BalancePageProps = {
   monthlyBalanceMap: Map<string, MonthlyBalance>
   paymentMethods: PaymentMethod[]
   onOpenPayment: (type: PaymentType) => void
+  onOpenPaymentMethodEntities: (seed: PaymentMethodEntitySeed) => void
 }
 
-const normalizeMethodType = (type: string) => {
-  if (type === 'card' || type === 'bank' || type === 'emoney' || type === 'cash') return type
-  return 'cash'
-}
-
-const BalancePage = ({ entries, monthlyBalanceMap, paymentMethods, onOpenPayment }: BalancePageProps) => {
+const BalancePage = ({
+  entries,
+  monthlyBalanceMap,
+  paymentMethods,
+  onOpenPayment,
+  onOpenPaymentMethodEntities,
+}: BalancePageProps) => {
   const currentMonthKey = dayjs().format('YYYY-MM')
   const balanceYm = dayjs(currentMonthKey).subtract(1, 'month').format('YYYY-MM')
   const carryoverBalance = monthlyBalanceMap.get(balanceYm)?.balance ?? null
@@ -2969,7 +3232,7 @@ const BalancePage = ({ entries, monthlyBalanceMap, paymentMethods, onOpenPayment
       card: [],
     }
     paymentMethods.forEach((method) => {
-      const type = normalizeMethodType(method.type) as PaymentType
+      const type = getPaymentType(method.type)
       groups[type].push(method)
     })
     return groups
@@ -2982,6 +3245,9 @@ const BalancePage = ({ entries, monthlyBalanceMap, paymentMethods, onOpenPayment
       return {
         id: method.id,
         name: method.name,
+        type: method.type,
+        icon_key: method.icon_key ?? null,
+        color: method.color ?? null,
         amount,
         caption: mode === 'card' ? '総支払予定' : '残高',
       }
@@ -2998,28 +3264,65 @@ const BalancePage = ({ entries, monthlyBalanceMap, paymentMethods, onOpenPayment
       <div className="summary-panel">
         <span>残高</span>
         <strong>¥{formatAmount(totalBalance)}</strong>
-        <button className="icon-button subtle">⋮</button>
       </div>
       <div className="summary-progress">
         <span style={{ width: `${Math.round(balanceRatio * 100)}%` }} />
       </div>
 
-      <BalanceSection title="現金" items={cashItems} onEmpty={() => onOpenPayment('cash')} />
-      <BalanceSection title="銀行口座" items={bankItems} onEmpty={() => onOpenPayment('bank')} />
-      <BalanceSection title="電子マネー" items={emoneyItems} onEmpty={() => onOpenPayment('emoney')} />
-      <BalanceSection title="クレジット" items={cardItems} onEmpty={() => onOpenPayment('card')} mode="card" />
+      <BalanceSection
+        title="現金"
+        items={cashItems}
+        onEmpty={() => onOpenPayment('cash')}
+        onOpenItem={(item) => onOpenPaymentMethodEntities({ methodId: item.id, methodName: item.name })}
+      />
+      <BalanceSection
+        title="銀行口座"
+        items={bankItems}
+        onEmpty={() => onOpenPayment('bank')}
+        onOpenItem={(item) => onOpenPaymentMethodEntities({ methodId: item.id, methodName: item.name })}
+      />
+      <BalanceSection
+        title="電子マネー"
+        items={emoneyItems}
+        onEmpty={() => onOpenPayment('emoney')}
+        onOpenItem={(item) => onOpenPaymentMethodEntities({ methodId: item.id, methodName: item.name })}
+      />
+      <BalanceSection
+        title="クレジット"
+        items={cardItems}
+        onEmpty={() => onOpenPayment('card')}
+        onOpenItem={(item) => onOpenPaymentMethodEntities({ methodId: item.id, methodName: item.name })}
+        mode="card"
+      />
     </section>
   )
 }
 
 type BalanceSectionProps = {
   title: string
-  items: { id: string; name: string; amount: number; caption: string }[]
+  items: {
+    id: string
+    name: string
+    type: string
+    icon_key?: string | null
+    color?: string | null
+    amount: number
+    caption: string
+  }[]
   onEmpty: () => void
+  onOpenItem: (item: {
+    id: string
+    name: string
+    type: string
+    icon_key?: string | null
+    color?: string | null
+    amount: number
+    caption: string
+  }) => void
   mode?: 'card'
 }
 
-const BalanceSection = ({ title, items, onEmpty, mode }: BalanceSectionProps) => (
+const BalanceSection = ({ title, items, onEmpty, onOpenItem, mode }: BalanceSectionProps) => (
   <div className="balance-section">
     <div className="balance-header">
       <span>{title}</span>
@@ -3033,25 +3336,205 @@ const BalanceSection = ({ title, items, onEmpty, mode }: BalanceSectionProps) =>
       <ul className="balance-list">
         {items.map((item) => (
           <li key={item.id}>
-            <div className="balance-info">
-              <span className={`balance-icon ${mode === 'card' ? 'card' : ''}`}>
-                {mode === 'card' ? <IconCard /> : <IconWallet />}
-              </span>
-              <div>
-                <strong>{item.name}</strong>
-                <span>{item.caption}</span>
+            <button type="button" className="balance-item-button" onClick={() => onOpenItem(item)}>
+              <div className="balance-info">
+                <span
+                  className={`balance-icon ${mode === 'card' ? 'card' : ''}`}
+                  style={{
+                    background: item.color ?? PAYMENT_DEFAULT_COLORS[getPaymentType(item.type)],
+                    color: '#fff',
+                  }}
+                >
+                  {getPaymentIconFromConfig(item.type, item.icon_key ?? null)}
+                </span>
+                <div>
+                  <strong>{item.name}</strong>
+                  <span>{item.caption}</span>
+                </div>
               </div>
-            </div>
-            <div className="balance-amount">
-              <strong>¥{formatAmount(item.amount)}</strong>
-              <span>›</span>
-            </div>
+              <div className="balance-amount">
+                <strong>¥{formatAmount(item.amount)}</strong>
+                <span>›</span>
+              </div>
+            </button>
           </li>
         ))}
       </ul>
     )}
   </div>
 )
+
+type ReportCategoryEntitiesPageProps = {
+  seed: ReportCategoryEntitySeed
+  entries: Entry[]
+  categoryMap: Map<string, EntryCategory>
+  paymentMethods: PaymentMethod[]
+}
+
+type HistoryLikeEntityListProps = {
+  entries: Entry[]
+  categoryMap: Map<string, EntryCategory>
+  paymentMap: Map<string, PaymentMethod>
+  emptyMessage: string
+}
+
+const HistoryLikeEntityList = ({ entries, categoryMap, paymentMap, emptyMessage }: HistoryLikeEntityListProps) => {
+  if (!entries.length) {
+    return <p className="muted">{emptyMessage}</p>
+  }
+
+  return (
+    <div className="entry-group-card">
+      <div className="entry-group-list">
+        {entries.map((entry) => {
+          const category = entry.entry_category_id ? categoryMap.get(entry.entry_category_id) : null
+          const method = entry.payment_method_id ? paymentMap.get(entry.payment_method_id) : null
+          const categoryColor = category?.color ?? '#8f9499'
+          const paymentClass = method?.type === 'card' ? 'credit-card' : method?.type ?? 'unknown'
+          const paymentOverlayStyle = method ? { background: getPaymentColor(method), color: '#fff' } : undefined
+          const memoText = entry.memo?.trim() ?? ''
+          const metaText = `${dayjs(entry.occurred_at).format('M/D HH:mm')}${memoText ? ` / ${memoText}` : ''}`
+
+          return (
+            <button key={entry.id} type="button" className="entry-button" disabled>
+              <div className="entry-row-main">
+                <span className="entry-category-icon" style={{ background: categoryColor }}>
+                  {getCategoryIcon(category?.icon_key) ?? (
+                    <span className="category-fallback">{category?.name?.slice(0, 1) ?? '?'}</span>
+                  )}
+                  <span className={`entry-payment-overlay ${paymentClass}`} style={paymentOverlayStyle}>
+                    {getPaymentIcon(method)}
+                  </span>
+                </span>
+                <div className="entry-info">
+                  <div className="entry-top-row">
+                    <strong className="entry-name">{category?.name ?? '未分類'}</strong>
+                    <span className="entry-memo">{metaText}</span>
+                    <div className="entry-badges">
+                      <span className={`badge ${entry.entry_type}`}>
+                        {entry.entry_type === 'income' ? '収入' : '支出'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="entry-amount-row">
+                    <strong>¥{formatAmount(entry.amount)}</strong>
+                  </div>
+                </div>
+              </div>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+const ReportCategoryEntitiesPage = ({ seed, entries, categoryMap, paymentMethods }: ReportCategoryEntitiesPageProps) => {
+  const filteredEntries = useMemo(() => {
+    if (seed.categoryId === CARRYOVER_CATEGORY_ID) return [] as Entry[]
+    return entries
+      .filter((entry) => entry.entry_type === seed.entryType && entry.entry_category_id === seed.categoryId)
+      .filter((entry) => {
+        const dateKey = getEntryDateKey(entry)
+        return dateKey >= seed.fromDate && dateKey < seed.toDateExclusive
+      })
+      .sort((a, b) => dayjs(b.occurred_at).valueOf() - dayjs(a.occurred_at).valueOf())
+  }, [entries, seed])
+  const paymentMap = useMemo(() => new Map(paymentMethods.map((item) => [item.id, item])), [paymentMethods])
+
+  const totalAmount = useMemo(
+    () => filteredEntries.reduce((sum, entry) => sum + entry.amount, 0),
+    [filteredEntries]
+  )
+
+  return (
+    <section className="card">
+      <div className="entity-page-header">
+        <span>{seed.rangeLabel}</span>
+        <strong>{seed.entryType === 'expense' ? '支出' : '収入'}明細</strong>
+      </div>
+      <div className="summary-strip entity-summary-strip">
+        <div>
+          <span>件数</span>
+          <strong>{filteredEntries.length}</strong>
+        </div>
+        <div>
+          <span>合計</span>
+          <strong>¥{formatAmount(totalAmount)}</strong>
+        </div>
+        <div>
+          <span>カテゴリ</span>
+          <strong>{seed.categoryName}</strong>
+        </div>
+      </div>
+      <HistoryLikeEntityList
+        entries={filteredEntries}
+        categoryMap={categoryMap}
+        paymentMap={paymentMap}
+        emptyMessage="このカテゴリに紐づく明細はありません"
+      />
+    </section>
+  )
+}
+
+type PaymentMethodEntitiesPageProps = {
+  seed: PaymentMethodEntitySeed
+  entries: Entry[]
+  categoryMap: Map<string, EntryCategory>
+  paymentMethods: PaymentMethod[]
+}
+
+const PaymentMethodEntitiesPage = ({ seed, entries, categoryMap, paymentMethods }: PaymentMethodEntitiesPageProps) => {
+  const filteredEntries = useMemo(() => {
+    return entries
+      .filter((entry) => entry.payment_method_id === seed.methodId)
+      .sort((a, b) => dayjs(b.occurred_at).valueOf() - dayjs(a.occurred_at).valueOf())
+  }, [entries, seed])
+  const paymentMap = useMemo(() => new Map(paymentMethods.map((item) => [item.id, item])), [paymentMethods])
+
+  const totals = useMemo(() => {
+    return filteredEntries.reduce(
+      (sum, entry) => {
+        if (entry.entry_type === 'income') {
+          sum.income += entry.amount
+        } else {
+          sum.expense += entry.amount
+        }
+        return sum
+      },
+      { income: 0, expense: 0 }
+    )
+  }, [filteredEntries])
+
+  return (
+    <section className="card">
+      <div className="entity-page-header">
+        <span>支払い方法に紐づく明細</span>
+        <strong>{seed.methodName}</strong>
+      </div>
+      <div className="summary-strip entity-summary-strip">
+        <div>
+          <span>収入</span>
+          <strong>¥{formatAmount(totals.income)}</strong>
+        </div>
+        <div>
+          <span>支出</span>
+          <strong>¥{formatAmount(totals.expense)}</strong>
+        </div>
+        <div>
+          <span>収支</span>
+          <strong>¥{formatAmount(totals.income - totals.expense)}</strong>
+        </div>
+      </div>
+      <HistoryLikeEntityList
+        entries={filteredEntries}
+        categoryMap={categoryMap}
+        paymentMap={paymentMap}
+        emptyMessage="この支払い方法に紐づく明細はありません"
+      />
+    </section>
+  )
+}
 
 type CategorySettingsPageProps = {
   categories: EntryCategory[]
@@ -3634,15 +4117,22 @@ type PaymentSettingsPageProps = {
   paymentType: PaymentType
   paymentMethods: PaymentMethod[]
   onAdd: (name: string, type: string) => void
+  onSave: (method: PaymentMethod) => void
   onDelete: (method: PaymentMethod) => void
 }
 
-const PaymentSettingsPage = ({ paymentType, paymentMethods, onAdd, onDelete }: PaymentSettingsPageProps) => {
+const PaymentSettingsPage = ({ paymentType, paymentMethods, onAdd, onSave, onDelete }: PaymentSettingsPageProps) => {
   const [showForm, setShowForm] = useState(false)
   const [name, setName] = useState('')
+  const [editingMethod, setEditingMethod] = useState<PaymentMethod | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editIconKey, setEditIconKey] = useState<string | null>(null)
+  const [editColor, setEditColor] = useState(CATEGORY_COLORS[0])
 
   const filtered = useMemo(() => {
-    return paymentMethods.filter((method) => normalizeMethodType(method.type) === paymentType)
+    return paymentMethods
+      .filter((method) => getPaymentType(method.type) === paymentType)
+      .sort((a, b) => a.sort_order - b.sort_order)
   }, [paymentMethods, paymentType])
 
   const handleSubmit = (event: FormEvent) => {
@@ -3653,17 +4143,82 @@ const PaymentSettingsPage = ({ paymentType, paymentMethods, onAdd, onDelete }: P
     setShowForm(false)
   }
 
+  const openEdit = (method: PaymentMethod) => {
+    setEditingMethod(method)
+    setEditName(method.name)
+    setEditIconKey(method.icon_key ?? getPaymentFallbackIconKey(method.type))
+    setEditColor(method.color ?? PAYMENT_DEFAULT_COLORS[getPaymentType(method.type)])
+  }
+
+  const handleUpdate = (event: FormEvent) => {
+    event.preventDefault()
+    if (!editingMethod || !editName.trim()) return
+    void onSave({
+      ...editingMethod,
+      name: editName.trim(),
+      icon_key: editIconKey ?? getPaymentFallbackIconKey(editingMethod.type),
+      color: editColor,
+      updated_at: editingMethod.updated_at,
+    })
+    setEditingMethod(null)
+  }
+
+  const handleMove = (method: PaymentMethod, direction: 'up' | 'down') => {
+    const index = filtered.findIndex((item) => item.id === method.id)
+    const target = direction === 'up' ? filtered[index - 1] : filtered[index + 1]
+    if (!target) return
+    void onSave({ ...method, sort_order: target.sort_order, updated_at: method.updated_at })
+    void onSave({ ...target, sort_order: method.sort_order, updated_at: target.updated_at })
+  }
+
   return (
     <div className="page">
       <ul className="category-list">
-        {filtered.map((method) => (
+        {filtered.map((method, index) => (
           <li key={method.id} className="category-row">
-            <span className="category-icon" style={{ background: 'var(--accent-dark)' }}>
-              <IconCard />
+            <span className="category-icon" style={{ background: getPaymentColor(method) }}>
+              {getPaymentIcon(method)}
             </span>
-            <strong>{method.name}</strong>
-            <div className="reorder-buttons">
-              <button onClick={() => onDelete(method)}>×</button>
+            <strong className="category-title">{method.name}</strong>
+            <div className="category-actions">
+              <div className="category-action-buttons">
+                <button
+                  type="button"
+                  className="icon-button-small"
+                  aria-label="編集"
+                  onClick={() => openEdit(method)}
+                >
+                  {renderMaterialIcon('edit')}
+                </button>
+                <button
+                  type="button"
+                  className="icon-button-small danger"
+                  aria-label="削除"
+                  onClick={() => onDelete(method)}
+                >
+                  {renderMaterialIcon('delete')}
+                </button>
+              </div>
+              <div className="reorder-buttons">
+                <button
+                  type="button"
+                  className="icon-button-small"
+                  aria-label="上へ"
+                  onClick={() => handleMove(method, 'up')}
+                  disabled={index === 0}
+                >
+                  {renderMaterialIcon('arrow_upward')}
+                </button>
+                <button
+                  type="button"
+                  className="icon-button-small"
+                  aria-label="下へ"
+                  onClick={() => handleMove(method, 'down')}
+                  disabled={index === filtered.length - 1}
+                >
+                  {renderMaterialIcon('arrow_downward')}
+                </button>
+              </div>
             </div>
           </li>
         ))}
@@ -3685,6 +4240,52 @@ const PaymentSettingsPage = ({ paymentType, paymentMethods, onAdd, onDelete }: P
               </button>
               <button type="submit" className="primary">
                 追加
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {editingMethod && (
+        <div className="sheet">
+          <form className="sheet-card scrollable" onSubmit={handleUpdate}>
+            <h3>{PAYMENT_TITLES[paymentType]}編集</h3>
+            <input
+              type="text"
+              placeholder="名称"
+              value={editName}
+              onChange={(event) => setEditName(event.target.value)}
+            />
+            <div className="icon-picker">
+              {PAYMENT_ICON_CHOICES.map((iconName) => (
+                <button
+                  key={iconName}
+                  type="button"
+                  className={`icon-choice ${editIconKey === iconName ? 'active' : ''}`}
+                  aria-label={iconName}
+                  onClick={() => setEditIconKey(iconName)}
+                >
+                  <span className="icon-preview">{renderMaterialIcon(iconName)}</span>
+                </button>
+              ))}
+            </div>
+            <div className="color-picker">
+              {CATEGORY_COLORS.map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  className={`color-swatch ${editColor === color ? 'active' : ''}`}
+                  style={{ background: color }}
+                  onClick={() => setEditColor(color)}
+                />
+              ))}
+            </div>
+            <div className="sheet-actions">
+              <button type="button" className="ghost" onClick={() => setEditingMethod(null)}>
+                キャンセル
+              </button>
+              <button type="submit" className="primary">
+                保存
               </button>
             </div>
           </form>

@@ -11,6 +11,9 @@ export type Entry = {
   occurred_at: string
   occurred_on: string
   recurring_rule_id: string | null
+  created_by_user_id?: string | null
+  created_by_user_name?: string | null
+  created_by_avatar_url?: string | null
   created_at: string
   updated_at: string
 }
@@ -34,6 +37,8 @@ export type PaymentMethod = {
   family_id: string
   name: string
   type: string
+  icon_key?: string | null
+  color?: string | null
   sort_order: number
   created_at: string
   updated_at: string

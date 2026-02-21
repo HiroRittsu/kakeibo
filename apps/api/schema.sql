@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS entries (
   occurred_at TEXT NOT NULL,
   occurred_on TEXT,
   recurring_rule_id TEXT,
+  created_by_user_id TEXT,
+  created_by_user_name TEXT,
+  created_by_avatar_url TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -26,6 +29,21 @@ CREATE INDEX IF NOT EXISTS idx_entries_family_occurred_on
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_recurring_unique
   ON entries (family_id, recurring_rule_id, occurred_on);
+
+CREATE TABLE IF NOT EXISTS entry_amount_change_logs (
+  id TEXT PRIMARY KEY,
+  family_id TEXT NOT NULL,
+  entry_id TEXT NOT NULL,
+  previous_amount INTEGER NOT NULL,
+  next_amount INTEGER NOT NULL,
+  changed_by_user_id TEXT NOT NULL,
+  changed_by_user_name TEXT,
+  changed_by_avatar_url TEXT,
+  changed_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_entry_amount_change_logs_family_entry_changed
+  ON entry_amount_change_logs (family_id, entry_id, changed_at);
 
 CREATE TABLE IF NOT EXISTS monthly_balance (
   family_id TEXT NOT NULL,
@@ -73,6 +91,8 @@ CREATE TABLE IF NOT EXISTS payment_methods (
   family_id TEXT NOT NULL,
   name TEXT NOT NULL,
   type TEXT NOT NULL,
+  icon_key TEXT,
+  color TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

@@ -13,6 +13,7 @@ export default defineConfig({
         'icons/icon-512.png',
         'icons/maskable-512.png',
         'icons/apple-touch-icon.png',
+        'icons/google-g.svg',
       ],
       manifest: {
         name: 'Kakeibo',

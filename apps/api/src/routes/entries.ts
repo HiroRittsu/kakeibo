@@ -74,6 +74,66 @@ const withReceiptResponse = async (
   return c.json(params.body, status)
 }
 
+type EntryRow = Record<string, unknown> & {
+  updated_at?: string
+  created_at?: string
+  occurred_on?: string
+  amount?: number
+  created_by_user_id?: string | null
+  created_by_user_name?: string | null
+  created_by_avatar_url?: string | null
+}
+
+type ActorProfile = {
+  id: string
+  name: string | null
+  avatar_url: string | null
+}
+
+const loadActorProfile = async (db: D1Database, actorUserId: string): Promise<ActorProfile> => {
+  const row = await db
+    .prepare('SELECT id, name, avatar_url FROM users WHERE id = ?')
+    .bind(actorUserId)
+    .first<{ id: string; name: string | null; avatar_url: string | null }>()
+
+  return {
+    id: row?.id ?? actorUserId,
+    name: row?.name ?? null,
+    avatar_url: row?.avatar_url ?? null,
+  }
+}
+
+const recordEntryAmountChange = async (
+  db: D1Database,
+  params: {
+    familyId: string
+    entryId: string
+    previousAmount: number
+    nextAmount: number
+    actor: ActorProfile
+  }
+) => {
+  if (params.previousAmount === params.nextAmount) return
+  const changedAt = nowIso()
+
+  await db
+    .prepare(
+      'INSERT INTO entry_amount_change_logs (id, family_id, entry_id, previous_amount, next_amount, changed_by_user_id, changed_by_user_name, changed_by_avatar_url, changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    )
+    .bind(
+      crypto.randomUUID(),
+      params.familyId,
+      params.entryId,
+      params.previousAmount,
+      params.nextAmount,
+      params.actor.id,
+      params.actor.name,
+      params.actor.avatar_url,
+      changedAt
+    )
+    .run()
+}
+
 export const registerEntryRoutes = (app: Hono<HonoEnv>) => {
   app.get('/entries', async (c) => {
     const familyId = requireFamilyId(c)
@@ -152,10 +212,22 @@ export const registerEntryRoutes = (app: Hono<HonoEnv>) => {
     const normalizedAmount = Math.round(amount)
 
     const db = c.env.DB
+    const actorUserId = getActorUserId(c)
+    const actorProfile = await loadActorProfile(db, actorUserId)
     const existing = await db
       .prepare('SELECT * FROM entries WHERE id = ? AND family_id = ?')
       .bind(id, familyId)
-      .first<Record<string, unknown> & { updated_at?: string; created_at?: string; occurred_on?: string }>()
+      .first<EntryRow>()
+    const createdByUserId =
+      typeof existing?.created_by_user_id === 'string' && existing.created_by_user_id
+        ? existing.created_by_user_id
+        : actorProfile.id
+    const createdByUserName =
+      typeof existing?.created_by_user_name === 'string' ? existing.created_by_user_name : actorProfile.name
+    const createdByAvatarUrl =
+      typeof existing?.created_by_avatar_url === 'string'
+        ? existing.created_by_avatar_url
+        : actorProfile.avatar_url
 
     if (entryCategoryId) {
       const category = await db
@@ -284,7 +356,7 @@ export const registerEntryRoutes = (app: Hono<HonoEnv>) => {
 
     await db
       .prepare(
-        'INSERT INTO entries (id, family_id, entry_type, amount, entry_category_id, payment_method_id, memo, occurred_at, occurred_on, recurring_rule_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET entry_type = excluded.entry_type, amount = excluded.amount, entry_category_id = excluded.entry_category_id, payment_method_id = excluded.payment_method_id, memo = excluded.memo, occurred_at = excluded.occurred_at, occurred_on = excluded.occurred_on, recurring_rule_id = excluded.recurring_rule_id, updated_at = excluded.updated_at'
+        'INSERT INTO entries (id, family_id, entry_type, amount, entry_category_id, payment_method_id, memo, occurred_at, occurred_on, recurring_rule_id, created_by_user_id, created_by_user_name, created_by_avatar_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET entry_type = excluded.entry_type, amount = excluded.amount, entry_category_id = excluded.entry_category_id, payment_method_id = excluded.payment_method_id, memo = excluded.memo, occurred_at = excluded.occurred_at, occurred_on = excluded.occurred_on, recurring_rule_id = excluded.recurring_rule_id, created_by_user_id = COALESCE(entries.created_by_user_id, excluded.created_by_user_id), created_by_user_name = COALESCE(entries.created_by_user_name, excluded.created_by_user_name), created_by_avatar_url = COALESCE(entries.created_by_avatar_url, excluded.created_by_avatar_url), updated_at = excluded.updated_at'
       )
       .bind(
         id,
@@ -297,15 +369,29 @@ export const registerEntryRoutes = (app: Hono<HonoEnv>) => {
         occurredAt,
         occurredOn,
         recurringRuleId,
+        createdByUserId,
+        createdByUserName,
+        createdByAvatarUrl,
         createdAt,
         updatedAt
       )
       .run()
 
+    const previousAmount = typeof existing?.amount === 'number' ? existing.amount : null
+    if (typeof previousAmount === 'number') {
+      await recordEntryAmountChange(db, {
+        familyId,
+        entryId: id,
+        previousAmount,
+        nextAmount: normalizedAmount,
+        actor: actorProfile,
+      })
+    }
+
     await recordAudit(
       db,
       familyId,
-      getActorUserId(c),
+      actorUserId,
       existing ? 'update' : 'create',
       'entries',
       id,
@@ -375,10 +461,12 @@ export const registerEntryRoutes = (app: Hono<HonoEnv>) => {
     if (!payload) return c.json(jsonError('Invalid JSON'), 400)
 
     const db = c.env.DB
+    const actorUserId = getActorUserId(c)
+    const actorProfile = await loadActorProfile(db, actorUserId)
     const existing = await db
       .prepare('SELECT * FROM entries WHERE id = ? AND family_id = ?')
       .bind(id, familyId)
-      .first<Record<string, unknown> & { updated_at?: string; occurred_on?: string }>()
+      .first<EntryRow>()
 
     if (!existing) {
       const body = fatalConflict({
@@ -591,7 +679,16 @@ export const registerEntryRoutes = (app: Hono<HonoEnv>) => {
       )
       .run()
 
-    await recordAudit(db, familyId, getActorUserId(c), 'update', 'entries', id, `entry ${entryType} ${amount}`)
+    const previousAmount = typeof existing.amount === 'number' ? existing.amount : amount
+    await recordEntryAmountChange(db, {
+      familyId,
+      entryId: id,
+      previousAmount,
+      nextAmount: amount,
+      actor: actorProfile,
+    })
+
+    await recordAudit(db, familyId, actorUserId, 'update', 'entries', id, `entry ${entryType} ${amount}`)
 
     const startYm = minYmFromDates(existing.occurred_on as string, occurredOn)
     await recalcMonthlyBalances(db, familyId, startYm)

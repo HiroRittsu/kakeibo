@@ -116,6 +116,9 @@ export const registerPaymentMethodRoutes = (app: Hono<HonoEnv>) => {
 
     const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null
     const type = typeof payload.type === 'string' && payload.type.trim() ? payload.type.trim() : null
+    const iconKey =
+      typeof payload.icon_key === 'string' && payload.icon_key.trim() ? payload.icon_key.trim() : null
+    const color = typeof payload.color === 'string' && payload.color.trim() ? payload.color.trim() : null
     if (!name || !type) return c.json(jsonError('name and type are required'), 400)
 
     const id = typeof payload.id === 'string' ? payload.id : crypto.randomUUID()
@@ -132,7 +135,12 @@ export const registerPaymentMethodRoutes = (app: Hono<HonoEnv>) => {
       .first<Record<string, unknown> & { updated_at?: string; created_at?: string }>()
 
     const matchesExisting =
-      !!existing && existing.name === name && existing.type === type && existing.sort_order === sortOrder
+      !!existing &&
+      existing.name === name &&
+      existing.type === type &&
+      existing.icon_key === iconKey &&
+      existing.color === color &&
+      existing.sort_order === sortOrder
 
     if (matchesExisting) {
       return withReceiptResponse(c, {
@@ -151,9 +159,9 @@ export const registerPaymentMethodRoutes = (app: Hono<HonoEnv>) => {
 
     await c.env.DB
       .prepare(
-        'INSERT INTO payment_methods (id, family_id, name, type, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, sort_order = excluded.sort_order, updated_at = excluded.updated_at'
+        'INSERT INTO payment_methods (id, family_id, name, type, icon_key, color, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, icon_key = excluded.icon_key, color = excluded.color, sort_order = excluded.sort_order, updated_at = excluded.updated_at'
       )
-      .bind(id, familyId, name, type, sortOrder, createdAt, updatedAt)
+      .bind(id, familyId, name, type, iconKey, color, sortOrder, createdAt, updatedAt)
       .run()
 
     await recordAudit(
