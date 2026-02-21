@@ -370,19 +370,19 @@ select {
 
 .entry-row {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
+  grid-template-columns: 56px minmax(0, 1fr);
   align-items: stretch;
-  gap: 10px;
+  gap: 12px;
   padding-bottom: 8px;
   border-bottom: 1px dotted #c7c7c7;
   min-width: 0;
 }
 
-.entry-row-icon {
-  width: 44px;
-  height: 44px;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
-  border: 2px solid #fff;
+.entry-row .entry-row-icon {
+  width: 56px;
+  height: 56px;
+  box-shadow: none;
+  border: none;
   align-self: center;
 }
 
@@ -569,9 +569,9 @@ select {
   background: #f7f5f2;
   padding: 8px 10px;
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) 20px;
+  grid-template-columns: 56px minmax(0, 1fr) 20px;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   text-align: left;
   color: #3f3f3f;
   cursor: pointer;
@@ -582,9 +582,9 @@ select {
   background: var(--accent-soft);
 }
 
-.entry-category-option-icon {
-  width: 36px;
-  height: 36px;
+.entry-category-option .entry-category-option-icon {
+  width: 56px;
+  height: 56px;
 }
 
 .entry-category-option-name {

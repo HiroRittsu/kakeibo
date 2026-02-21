@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dayjs from 'dayjs'
 import { useLiveQuery } from 'dexie-react-hooks'
 import './App.css'
@@ -58,6 +58,12 @@ type AuthSession = {
   }
 }
 
+type CachedAuthIdentity = {
+  family_id: string
+  user_id: string
+  verified_at: string
+}
+
 type DayTotals = {
   income: number
   expense: number
@@ -101,7 +107,38 @@ type ReportData = {
 
 const CARRYOVER_CATEGORY_ID = 'carryover'
 const SESSION_CHECK_TIMEOUT_MS = 7000
+const BACKGROUND_SESSION_CHECK_TIMEOUT_MS = 2500
+const AUTH_CACHE_KEY = 'auth_session_cache'
 const buildMonthlyBalanceId = (familyId: string, ym: string) => `${familyId}:${ym}`
+
+const loadCachedAuthIdentity = (): CachedAuthIdentity | null => {
+  const raw = localStorage.getItem(AUTH_CACHE_KEY)
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as Partial<CachedAuthIdentity>
+    if (typeof parsed.family_id !== 'string' || typeof parsed.user_id !== 'string') return null
+    return {
+      family_id: parsed.family_id,
+      user_id: parsed.user_id,
+      verified_at: typeof parsed.verified_at === 'string' ? parsed.verified_at : new Date(0).toISOString(),
+    }
+  } catch {
+    return null
+  }
+}
+
+const saveCachedAuthIdentity = (familyId: string, userId: string) => {
+  const payload: CachedAuthIdentity = {
+    family_id: familyId,
+    user_id: userId,
+    verified_at: new Date().toISOString(),
+  }
+  localStorage.setItem(AUTH_CACHE_KEY, JSON.stringify(payload))
+}
+
+const clearCachedAuthIdentity = () => {
+  localStorage.removeItem(AUTH_CACHE_KEY)
+}
 
 const getYmFromDate = (value: string) => value.slice(0, 7)
 
@@ -814,8 +851,11 @@ function App() {
   const [syncFailure, setSyncFailure] = useState<SyncFailure | null>(null)
   const [authStatus, setAuthStatus] = useState<'loading' | 'logged-out' | 'ready'>('loading')
   const [authError, setAuthError] = useState<string | null>(null)
+  const [isOfflineAuthMode, setIsOfflineAuthMode] = useState(false)
+  const [isSessionVerified, setIsSessionVerified] = useState(false)
   const [historyMonthYm, setHistoryMonthYm] = useState(() => dayjs().format('YYYY-MM'))
   const toastTimerRef = useRef<number | null>(null)
+  const sessionCheckInFlightRef = useRef<Promise<boolean> | null>(null)
 
   const entries = useLiveQuery(() => db.entries.orderBy('occurred_at').reverse().toArray(), [])
   const entryCategories = useLiveQuery(() => db.entryCategories.orderBy('sort_order').toArray(), [])
@@ -849,40 +889,7 @@ function App() {
     return new Map((monthlyBalances ?? []).map((row) => [row.ym, row]))
   }, [monthlyBalances])
 
-  const loadSession = async () => {
-    const controller = new AbortController()
-    const timeoutId = window.setTimeout(() => {
-      controller.abort()
-    }, SESSION_CHECK_TIMEOUT_MS)
-
-    try {
-      const response = await apiFetch('/auth/session', { signal: controller.signal })
-      if (!response.ok) {
-        setAuthStatus('logged-out')
-        return
-      }
-      const data = (await response.json()) as { session: AuthSession | null }
-      if (!data.session) {
-        setAuthStatus('logged-out')
-        return
-      }
-      if (!data.session.family_id) {
-        setAuthStatus('logged-out')
-        return
-      }
-      setIdentity(data.session.family_id, data.session.user.id)
-      setAuthStatus('ready')
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        setAuthError((current) => current ?? 'セッション確認がタイムアウトしました。ログインして続行してください。')
-      }
-      setAuthStatus('logged-out')
-    } finally {
-      window.clearTimeout(timeoutId)
-    }
-  }
-
-  const showToast = (message: string, type: 'error' | 'info' = 'error') => {
+  const showToast = useCallback((message: string, type: 'error' | 'info' = 'error') => {
     setToast({ message, type })
     if (toastTimerRef.current) {
       window.clearTimeout(toastTimerRef.current)
@@ -891,18 +898,141 @@ function App() {
     toastTimerRef.current = window.setTimeout(() => {
       setToast(null)
     }, 3000)
-  }
+  }, [])
 
-  const runSync = async () => {
+  const applyCachedAuthMode = useCallback((options: { showOfflineToast?: boolean } = {}) => {
+    const cached = loadCachedAuthIdentity()
+    if (!cached) return false
+    setIdentity(cached.family_id, cached.user_id)
+    setIsOfflineAuthMode(true)
+    setIsSessionVerified(false)
+    setAuthError(null)
+    setAuthStatus('ready')
+    if (options.showOfflineToast) {
+      showToast('オフラインのため、前回ログイン情報で起動しました', 'info')
+    }
+    return true
+  }, [showToast])
+
+  const loadSession = useCallback(async (
+    options: {
+      timeoutMs?: number
+      allowCachedFallback?: boolean
+      notifyOfflineFallback?: boolean
+      unauthenticatedError?: string | null
+    } = {}
+  ): Promise<boolean> => {
+    if (sessionCheckInFlightRef.current) {
+      return await sessionCheckInFlightRef.current
+    }
+
+    const request = (async () => {
+      const {
+        timeoutMs = SESSION_CHECK_TIMEOUT_MS,
+        allowCachedFallback = false,
+        notifyOfflineFallback = false,
+        unauthenticatedError = null,
+      } = options
+      const controller = new AbortController()
+      const timeoutId = window.setTimeout(() => {
+        controller.abort()
+      }, timeoutMs)
+
+      try {
+        const response = await apiFetch('/auth/session', { signal: controller.signal })
+        if (!response.ok) {
+          if (unauthenticatedError) {
+            setAuthError(unauthenticatedError)
+          }
+          clearCachedAuthIdentity()
+          setIsSessionVerified(false)
+          setIsOfflineAuthMode(false)
+          setAuthStatus('logged-out')
+          return false
+        }
+
+        const data = (await response.json()) as { session: AuthSession | null }
+        if (!data.session || !data.session.family_id) {
+          if (unauthenticatedError) {
+            setAuthError(unauthenticatedError)
+          }
+          clearCachedAuthIdentity()
+          setIsSessionVerified(false)
+          setIsOfflineAuthMode(false)
+          setAuthStatus('logged-out')
+          return false
+        }
+
+        setIdentity(data.session.family_id, data.session.user.id)
+        saveCachedAuthIdentity(data.session.family_id, data.session.user.id)
+        setIsSessionVerified(true)
+        setIsOfflineAuthMode(false)
+        setAuthError(null)
+        setAuthStatus('ready')
+        return true
+      } catch (error) {
+        const isAbortError = error instanceof DOMException && error.name === 'AbortError'
+        const isNetworkError = error instanceof TypeError
+        if (
+          (!navigator.onLine || isAbortError || isNetworkError) &&
+          allowCachedFallback &&
+          applyCachedAuthMode({ showOfflineToast: notifyOfflineFallback })
+        ) {
+          return false
+        }
+        if (isAbortError) {
+          setAuthError((current) => current ?? 'セッション確認がタイムアウトしました。ログインして続行してください。')
+        } else if (!navigator.onLine) {
+          setAuthError('オフラインです。オンラインで一度ログインしてください。')
+        }
+        setIsSessionVerified(false)
+        setIsOfflineAuthMode(false)
+        setAuthStatus('logged-out')
+        return false
+      } finally {
+        window.clearTimeout(timeoutId)
+      }
+    })()
+
+    sessionCheckInFlightRef.current = request.finally(() => {
+      sessionCheckInFlightRef.current = null
+    })
+    return await sessionCheckInFlightRef.current
+  }, [applyCachedAuthMode])
+
+  const runSync = useCallback(async (options: { silentIfOffline?: boolean } = {}) => {
+    if (!navigator.onLine) {
+      if (!options.silentIfOffline) {
+        showToast('オフライン中のため同期はスキップしました', 'info')
+      }
+      return
+    }
+
+    if (!isSessionVerified) {
+      const verified = await loadSession({
+        timeoutMs: BACKGROUND_SESSION_CHECK_TIMEOUT_MS,
+        allowCachedFallback: true,
+        notifyOfflineFallback: false,
+        unauthenticatedError: 'セッションが切れました。再ログインしてください。',
+      })
+      if (!verified) return
+    }
+
     const result = await syncOutbox()
     if (!result.ok) {
       setSyncFailure(result.failure)
       showToast(formatSyncFailureMessage(result.failure))
       if (result.failure.auth_required) {
+        clearCachedAuthIdentity()
+        setIsSessionVerified(false)
         setAuthError('セッションが切れました。再ログインしてください。')
+        setIsOfflineAuthMode(false)
         setAuthStatus('logged-out')
       }
       return
+    }
+    if (isOfflineAuthMode) {
+      setIsOfflineAuthMode(false)
     }
     if (result.dead_letters > 0) {
       showToast('要対応の同期エラーがあります。詳細をコピーしてください。')
@@ -911,7 +1041,7 @@ function App() {
     if (currentDeadLetterCount === 0) {
       setSyncFailure(null)
     }
-  }
+  }, [isOfflineAuthMode, isSessionVerified, loadSession, showToast])
 
   const handleCopySyncFailureLog = async () => {
     if (!syncFailureLog) return
@@ -936,8 +1066,22 @@ function App() {
       const next = params.toString()
       window.history.replaceState({}, '', `${window.location.pathname}${next ? `?${next}` : ''}`)
     }
-    void loadSession()
-  }, [])
+    if (applyCachedAuthMode()) {
+      void loadSession({
+        timeoutMs: BACKGROUND_SESSION_CHECK_TIMEOUT_MS,
+        allowCachedFallback: true,
+        notifyOfflineFallback: false,
+        unauthenticatedError: 'セッションが切れました。再ログインしてください。',
+      })
+      return
+    }
+    void loadSession({
+      timeoutMs: SESSION_CHECK_TIMEOUT_MS,
+      allowCachedFallback: false,
+      notifyOfflineFallback: false,
+      unauthenticatedError: null,
+    })
+  }, [applyCachedAuthMode, loadSession])
 
   useEffect(() => {
     return () => {
@@ -949,9 +1093,25 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (authStatus !== 'ready') return
-    void runSync()
-  }, [authStatus])
+    if (authStatus !== 'ready' || isSessionVerified) return
+    const onOnline = () => {
+      void loadSession({
+        timeoutMs: BACKGROUND_SESSION_CHECK_TIMEOUT_MS,
+        allowCachedFallback: true,
+        notifyOfflineFallback: false,
+        unauthenticatedError: 'セッションが切れました。再ログインしてください。',
+      })
+    }
+    window.addEventListener('online', onOnline)
+    return () => {
+      window.removeEventListener('online', onOnline)
+    }
+  }, [authStatus, isSessionVerified, loadSession])
+
+  useEffect(() => {
+    if (authStatus !== 'ready' || !isSessionVerified) return
+    void runSync({ silentIfOffline: true })
+  }, [authStatus, isSessionVerified, runSync])
 
   const handleSync = async () => {
     if (authStatus !== 'ready') return
@@ -1006,6 +1166,7 @@ function App() {
     localStorage.removeItem('last_sync')
     localStorage.removeItem('sync_cursor')
     localStorage.removeItem('sync_event_buffer')
+    clearCachedAuthIdentity()
   }
 
   const handleLogout = async () => {
@@ -1034,6 +1195,8 @@ function App() {
     setEntrySeed(null)
     setPreferredEntryType('expense')
     setHistoryMonthYm(dayjs().format('YYYY-MM'))
+    setIsOfflineAuthMode(false)
+    setIsSessionVerified(false)
     setAuthError(null)
     setAuthStatus('logged-out')
   }
