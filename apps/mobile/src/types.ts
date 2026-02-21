@@ -68,8 +68,31 @@ export type MonthlyBalance = {
 
 export type OutboxItem = {
   id: string
-  method: 'POST' | 'PATCH' | 'DELETE'
+  method: 'POST' | 'PATCH' | 'PUT' | 'DELETE'
   endpoint: string
   payload: Record<string, unknown> | null
   created_at: string
+  queue_order: number
+  entity_type: 'entries' | 'entry_categories' | 'payment_methods' | 'recurring_rules' | 'monthly_balance'
+  entity_id: string
+  operation: 'upsert' | 'delete'
+  base_updated_at: string | null
+  attempt_count: number
+  next_retry_at: string | null
+  last_error_code: string | null
+  last_error_detail: string | null
+}
+
+export type OutboxDeadLetter = {
+  id: string
+  failed_at: string
+  status: number | null
+  error_code: string | null
+  error_detail: string | null
+  server_snapshot: Record<string, unknown> | null
+  request_payload: Record<string, unknown> | null
+  endpoint: string
+  method: 'POST' | 'PATCH' | 'PUT' | 'DELETE'
+  entity_type: 'entries' | 'entry_categories' | 'payment_methods' | 'recurring_rules' | 'monthly_balance'
+  entity_id: string
 }

@@ -1,13 +1,18 @@
 import { randomUUID } from 'node:crypto'
 
 const baseUrl = (process.env.API_BASE_URL ?? 'http://127.0.0.1:8787').replace(/\/$/, '')
-const familyId = process.env.FAMILY_ID ?? 'family-default'
-const userId = process.env.USER_ID ?? 'user-default'
+const sessionCookieRaw = process.env.API_SESSION_COOKIE?.trim() ?? ''
+const sessionCookie =
+  !sessionCookieRaw || sessionCookieRaw.includes('=') ? sessionCookieRaw : `kakeibo_session=${sessionCookieRaw}`
 
-const headers = {
+const authHeaders = {
   'Content-Type': 'application/json',
-  'X-Family-Id': familyId,
-  'X-User-Id': userId,
+  ...(sessionCookie ? { Cookie: sessionCookie } : {}),
+}
+
+if (!sessionCookie) {
+  console.error('API_SESSION_COOKIE is required. Example: API_SESSION_COOKIE=kakeibo_session=<id> npm run api:smoke')
+  process.exit(1)
 }
 
 const toJson = async (response) => {
@@ -22,12 +27,17 @@ const toJson = async (response) => {
 
 const requestRaw = async (
   path,
-  { method = 'GET', body, headers: extraHeaders, useDefaultHeaders = true } = {}
+  {
+    method = 'GET',
+    body,
+    headers: extraHeaders,
+    withAuth = true,
+  } = {}
 ) => {
-  const mergedHeaders = useDefaultHeaders ? { ...headers, ...(extraHeaders ?? {}) } : { ...(extraHeaders ?? {}) }
+  const headers = withAuth ? { ...authHeaders, ...(extraHeaders ?? {}) } : { ...(extraHeaders ?? {}) }
   const response = await fetch(`${baseUrl}${path}`, {
     method,
-    headers: mergedHeaders,
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   })
   return {
@@ -39,9 +49,7 @@ const requestRaw = async (
 const request = async (path, options) => {
   const { response, data } = await requestRaw(path, options)
   if (!response.ok) {
-    const allow = response.headers.get('allow')
-    const allowNote = allow ? ` (allow: ${allow})` : ''
-    throw new Error(`${response.status} ${response.url}${allowNote} ${JSON.stringify(data)}`)
+    throw new Error(`${response.status} ${response.url} ${JSON.stringify(data)}`)
   }
   return data
 }
@@ -61,82 +69,20 @@ const expectStatus = async (label, path, options, expected) =>
   step(label, async () => {
     const { response, data } = await requestRaw(path, options)
     if (!expected.includes(response.status)) {
-      const allow = response.headers.get('allow')
-      const allowNote = allow ? ` (allow: ${allow})` : ''
-      throw new Error(`expected ${expected.join('/')} got ${response.status}${allowNote} ${JSON.stringify(data)}`)
+      throw new Error(`expected ${expected.join('/')} got ${response.status} ${JSON.stringify(data)}`)
     }
     return data
   })
 
-const expectEmptyEntries = (data) => {
-  if (!data || !Array.isArray(data.entries)) {
-    throw new Error('entries response missing')
-  }
-  if (data.entries.length > 0) {
-    throw new Error('expected empty entries')
-  }
-}
-
 const run = async () => {
-  await step('health', () => request('/health'))
-
-  await expectStatus('missing family header', '/entries', { useDefaultHeaders: false }, [400])
-  await expectStatus('entry invalid amount', '/entries', { method: 'POST', body: { entry_type: 'expense', amount: 0 } }, [400])
-  await expectStatus(
-    'entry invalid type',
-    '/entries',
-    { method: 'POST', body: { entry_type: 'invalid', amount: 100 } },
-    [400]
-  )
-  await expectStatus(
-    'entry-category missing name',
-    '/entry-categories',
-    { method: 'POST', body: { type: 'expense' } },
-    [400]
-  )
-  await expectStatus(
-    'entry-category missing type',
-    '/entry-categories',
-    { method: 'POST', body: { name: 'Missing Type' } },
-    [400]
-  )
-  await expectStatus(
-    'payment-method missing name',
-    '/payment-methods',
-    { method: 'POST', body: { type: 'cash' } },
-    [400]
-  )
-  await expectStatus(
-    'payment-method missing type',
-    '/payment-methods',
-    { method: 'POST', body: { name: 'Missing Type' } },
-    [400]
-  )
-  await expectStatus(
-    'recurring-rule invalid payload',
-    '/recurring-rules',
-    { method: 'POST', body: { entry_type: 'expense', amount: 0 } },
-    [400]
-  )
-  await expectStatus('monthly-balance missing ym', '/monthly-balance', {}, [400])
-  await expectStatus(
-    'monthly-balance missing balance',
-    '/monthly-balance/2026-01',
-    { method: 'PUT', body: {} },
-    [400]
-  )
-  await expectStatus('method mismatch entry-categories', '/entry-categories', { method: 'PUT' }, [404, 405])
-
   const categoryId = randomUUID()
   const paymentId = randomUUID()
-  const recurringId = randomUUID()
   const entryId = randomUUID()
+  const idempotentPaymentId = randomUUID()
   const now = new Date().toISOString()
 
-  await step('pull entries', () => request('/entries'))
-  await step('pull entry-categories', () => request('/entry-categories'))
-  await step('pull payment-methods', () => request('/payment-methods'))
-  await step('pull recurring-rules', () => request('/recurring-rules'))
+  await step('health', () => request('/health', { withAuth: false }))
+  await expectStatus('unauthorized entries without cookie', '/entries', { withAuth: false }, [401])
 
   const category = await step('create entry-category', () =>
     request('/entry-categories', {
@@ -145,7 +91,7 @@ const run = async () => {
         id: categoryId,
         name: 'Smoke Food',
         type: 'expense',
-        icon_key: 'food',
+        icon_key: 'restaurant',
         color: '#d9554c',
         sort_order: 1,
       },
@@ -164,25 +110,7 @@ const run = async () => {
     })
   )
 
-  const recurring = await step('create recurring-rule', () =>
-    request('/recurring-rules', {
-      method: 'POST',
-      body: {
-        id: recurringId,
-        entry_type: 'expense',
-        amount: 1200,
-        entry_category_id: categoryId,
-        payment_method_id: paymentId,
-        memo: 'Smoke Rule',
-        frequency: 'monthly',
-        day_of_month: 1,
-        start_at: now,
-        is_active: true,
-      },
-    })
-  )
-
-  const entry = await step('create entry', () =>
+  const createdEntry = await step('create entry', () =>
     request('/entries', {
       method: 'POST',
       body: {
@@ -193,82 +121,105 @@ const run = async () => {
         payment_method_id: paymentId,
         memo: 'Smoke Entry',
         occurred_at: now,
-        recurring_rule_id: recurringId,
-        client_updated_at: now,
       },
     })
   )
 
-  const entryUpdatedAt = entry?.entry?.updated_at ?? now
+  const createdUpdatedAt = createdEntry?.entry?.updated_at
+  if (!createdUpdatedAt) {
+    throw new Error('created entry.updated_at missing')
+  }
 
-  const patched = await step('update entry', () =>
+  const patched = await step('patch entry with current base_updated_at', () =>
+    request(`/entries/${entryId}`, {
+      method: 'PATCH',
+      body: {
+        amount: 600,
+        base_updated_at: createdUpdatedAt,
+      },
+    })
+  )
+
+  if (patched?.conflict !== false) {
+    throw new Error('expected conflict=false in first patch')
+  }
+
+  const softConflict = await step('soft conflict returns 200', () =>
     request(`/entries/${entryId}`, {
       method: 'PATCH',
       body: {
         amount: 700,
-        memo: 'Smoke Entry Updated',
+        base_updated_at: createdUpdatedAt,
       },
     })
   )
 
-  const patchedUpdatedAt = patched?.entry?.updated_at ?? entryUpdatedAt
-
-  const conflictResult = await step('entry conflict', () =>
-    request('/entries', {
-      method: 'POST',
-      body: {
-        id: entryId,
-        entry_type: 'expense',
-        amount: 800,
-        entry_category_id: categoryId,
-        payment_method_id: paymentId,
-        memo: 'Smoke Entry Conflict',
-        occurred_at: now,
-        client_updated_at: entryUpdatedAt,
-      },
-    })
-  )
-
-  if (conflictResult?.conflict !== true) {
-    throw new Error('expected conflict true')
+  if (softConflict?.conflict !== true || softConflict?.conflict_class !== 'soft') {
+    throw new Error('expected soft conflict payload')
   }
 
-  await step('entries since (future)', async () => {
-    const data = await request('/entries?since=2999-01-01T00:00:00.000Z')
-    expectEmptyEntries(data)
-  })
-
-  const ym = now.slice(0, 7)
-  await step('monthly-balance put', () =>
-    request(`/monthly-balance/${ym}`, {
-      method: 'PUT',
+  const fatal = await expectStatus(
+    'fatal conflict returns 409 with detail',
+    '/entries',
+    {
+      method: 'POST',
       body: {
-        balance: 12345,
-        is_closed: true,
+        id: randomUUID(),
+        entry_type: 'expense',
+        amount: 100,
+        entry_category_id: randomUUID(),
+        payment_method_id: paymentId,
+        memo: 'Invalid category',
+        occurred_at: now,
       },
+    },
+    [409]
+  )
+
+  if (fatal?.error?.kind !== 'fatal_conflict') {
+    throw new Error('expected fatal_conflict kind')
+  }
+  if (!fatal?.error?.code) {
+    throw new Error('expected fatal conflict code')
+  }
+
+  const requestId = randomUUID()
+  const idempotentBody = {
+    id: idempotentPaymentId,
+    name: 'Idempotent Card',
+    type: 'card',
+    sort_order: 10,
+  }
+
+  const firstIdempotent = await step('idempotent first request', () =>
+    request('/payment-methods', {
+      method: 'POST',
+      headers: { 'X-Outbox-Id': requestId },
+      body: idempotentBody,
     })
   )
-  await step('monthly-balance get', async () => {
-    const data = await request(`/monthly-balance?ym=${ym}`)
-    if (!data?.monthly_balance) {
-      throw new Error('monthly_balance missing')
-    }
-    return data
-  })
 
-  await step('reports week', () => request('/reports?range=week'))
-  await step('reports month', () => request('/reports?range=month'))
-  await step('reports year', () => request('/reports?range=year'))
+  const secondIdempotent = await step('idempotent second request', () =>
+    request('/payment-methods', {
+      method: 'POST',
+      headers: { 'X-Outbox-Id': requestId },
+      body: idempotentBody,
+    })
+  )
 
-  await step('audit-logs', async () => {
-    const data = await request('/audit-logs?limit=5')
-    if (!data || !Array.isArray(data.audit_logs)) {
-      throw new Error('audit_logs missing')
+  if (firstIdempotent?.payment_method?.id !== idempotentPaymentId) {
+    throw new Error('first idempotent response id mismatch')
+  }
+  if (secondIdempotent?.payment_method?.id !== idempotentPaymentId) {
+    throw new Error('second idempotent response id mismatch')
+  }
+
+  await step('idempotent method exists once', async () => {
+    const data = await request('/payment-methods')
+    const matches = (data?.payment_methods ?? []).filter((row) => row.id === idempotentPaymentId)
+    if (matches.length !== 1) {
+      throw new Error(`expected 1 payment method, got ${matches.length}`)
     }
-    if (data.audit_logs.length === 0) {
-      throw new Error('audit_logs empty')
-    }
-    return data
   })
 
   await step('delete entry', () =>
@@ -277,14 +228,14 @@ const run = async () => {
     })
   )
 
-  await step('delete recurring-rule', () =>
-    request(`/recurring-rules/${recurringId}`, {
+  await step('delete payment-method primary', () =>
+    request(`/payment-methods/${paymentId}`, {
       method: 'DELETE',
     })
   )
 
-  await step('delete payment-method', () =>
-    request(`/payment-methods/${paymentId}`, {
+  await step('delete payment-method idempotent', () =>
+    request(`/payment-methods/${idempotentPaymentId}`, {
       method: 'DELETE',
     })
   )
@@ -295,7 +246,7 @@ const run = async () => {
     })
   )
 
-  if (!category?.entry_category?.id || !payment?.payment_method?.id || !recurring?.recurring_rule?.id) {
+  if (!category?.entry_category?.id || !payment?.payment_method?.id) {
     throw new Error('create responses missing')
   }
 

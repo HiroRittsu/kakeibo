@@ -4,8 +4,16 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import './App.css'
 import { db } from './db'
 import { apiFetch, getApiBaseUrl, getFamilyId, setIdentity } from './lib/api'
-import { enqueueOutbox, syncOutbox, type SyncFailure } from './lib/sync'
-import type { Entry, EntryCategory, EntryType, MonthlyBalance, PaymentMethod, RecurringRule } from './types'
+import { enqueueOutbox, getRecentSyncEvents, syncOutbox, type SyncFailure } from './lib/sync'
+import type {
+  Entry,
+  EntryCategory,
+  EntryType,
+  MonthlyBalance,
+  OutboxDeadLetter,
+  PaymentMethod,
+  RecurringRule,
+} from './types'
 
 type TabKey = 'home' | 'history' | 'reports'
 
@@ -92,6 +100,7 @@ type ReportData = {
 }
 
 const CARRYOVER_CATEGORY_ID = 'carryover'
+const SESSION_CHECK_TIMEOUT_MS = 7000
 const buildMonthlyBalanceId = (familyId: string, ym: string) => `${familyId}:${ym}`
 
 const getYmFromDate = (value: string) => value.slice(0, 7)
@@ -231,6 +240,18 @@ const formatAmount = (amount: number) => {
   return new Intl.NumberFormat('ja-JP').format(amount)
 }
 
+const parseMonthYm = (ym: string) => {
+  const parsed = dayjs(`${ym}-01`)
+  if (!parsed.isValid()) return dayjs().startOf('month')
+  return parsed.startOf('month')
+}
+
+const getDefaultSelectedDateForMonth = (month: dayjs.Dayjs) => {
+  const today = dayjs()
+  if (today.isSame(month, 'month')) return today.format('YYYY-MM-DD')
+  return month.startOf('month').format('YYYY-MM-DD')
+}
+
 const toTokyoDateString = (value: string) => {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value.slice(0, 10)
@@ -250,10 +271,10 @@ const buildEntryCreatePayload = (entry: Entry) => ({
   occurred_at: entry.occurred_at,
   occurred_on: entry.occurred_on,
   recurring_rule_id: entry.recurring_rule_id,
-  client_updated_at: entry.updated_at,
+  base_updated_at: null,
 })
 
-const buildEntryUpdatePayload = (entry: Entry, clientUpdatedAt: string | null) => ({
+const buildEntryUpdatePayload = (entry: Entry, baseUpdatedAt: string | null) => ({
   entry_type: entry.entry_type,
   amount: entry.amount,
   entry_category_id: entry.entry_category_id,
@@ -262,7 +283,7 @@ const buildEntryUpdatePayload = (entry: Entry, clientUpdatedAt: string | null) =
   occurred_at: entry.occurred_at,
   occurred_on: entry.occurred_on,
   recurring_rule_id: entry.recurring_rule_id,
-  client_updated_at: clientUpdatedAt,
+  base_updated_at: baseUpdatedAt,
 })
 
 const IconBase = ({ children }: { children: ReactNode }) => (
@@ -298,15 +319,6 @@ const IconChart = () => (
     <circle cx="12" cy="12" r="9" />
     <path d="M12 12V3" />
     <path d="M12 12l6.5 3.5" />
-  </IconBase>
-)
-
-const IconBar = () => (
-  <IconBase>
-    <path d="M4 20h16" />
-    <path d="M7 20V11" />
-    <path d="M12 20V6" />
-    <path d="M17 20V14" />
   </IconBase>
 )
 
@@ -600,42 +612,6 @@ const computeReport = (
   return { summary: summaryTotals, categoryTotalsByType }
 }
 
-const buildReportSeries = (
-  entries: ReportEntry[],
-  range: 'week' | 'month' | 'year',
-  entryType: EntryType,
-  baseDate = dayjs()
-) => {
-  const now = baseDate
-  const { start, end } = getRangeBounds(range, now)
-  const unit = range === 'year' ? 'month' : 'day'
-  const maxPoints = range === 'year' ? 12 : range === 'month' ? end.date() : 7
-  const count = maxPoints
-  const points = Array.from({ length: Math.max(1, count) }, (_, index) => {
-    const date = start.add(index, unit)
-    return {
-      key: unit === 'month' ? date.format('YYYY-MM') : date.format('YYYY-MM-DD'),
-      label: range === 'year' ? date.format('M月') : range === 'week' ? date.format('dd') : date.format('D'),
-    }
-  })
-  const seriesEnd = start.add(Math.max(0, count - 1), unit).endOf(unit)
-
-  const totals = new Map<string, number>()
-  entries.forEach((entry) => {
-    if (entry.entry_type !== entryType) return
-    const date = dayjs(entry.occurred_at)
-    if (date.isBefore(start) || date.isAfter(seriesEnd)) return
-    const key = range === 'year' ? date.format('YYYY-MM') : date.format('YYYY-MM-DD')
-    totals.set(key, (totals.get(key) ?? 0) + entry.amount)
-  })
-
-  return points.map((point) => ({
-    key: point.key,
-    label: point.label,
-    total: totals.get(point.key) ?? 0,
-  }))
-}
-
 const estimateMonthlyAmount = (rule: RecurringRule) => {
   const frequency = rule.frequency || 'monthly'
   if (frequency === 'weekly') return rule.amount * 4
@@ -701,7 +677,7 @@ const formatSyncFailureMessage = (failure: SyncFailure) => {
     return 'ログインが必要です'
   }
   if (status === 409) {
-    return '同期中に競合が発生しました'
+    return '要対応の同期競合があります'
   }
   if (status && status >= 500) {
     return `${actionLabel}に失敗しました（サーバーエラー）`
@@ -710,6 +686,89 @@ const formatSyncFailureMessage = (failure: SyncFailure) => {
     return `${actionLabel}に失敗しました`
   }
   return '通信に失敗しました。ネットワークを確認してください'
+}
+
+const buildSyncFailureLog = (failure: SyncFailure) => {
+  const lines = [
+    '[kakeibo sync error]',
+    `occurred_at: ${failure.occurred_at}`,
+    `stage: ${failure.stage}`,
+    failure.status ? `status: ${failure.status}` : null,
+    failure.error_code ? `error_code: ${failure.error_code}` : null,
+    failure.method ? `method: ${failure.method}` : null,
+    failure.endpoint ? `endpoint: ${failure.endpoint}` : null,
+    failure.message ? `message: ${failure.message}` : null,
+    failure.detail ? `detail: ${failure.detail}` : null,
+  ].filter((line): line is string => Boolean(line))
+
+  return lines.join('\n')
+}
+
+const buildDeadLetterLog = (deadLetters: OutboxDeadLetter[]) => {
+  if (!deadLetters.length) return ''
+
+  const lines = ['[kakeibo fatal conflicts]']
+  deadLetters.forEach((item, index) => {
+    lines.push(`--- item_${index + 1} ---`)
+    lines.push(`failed_at: ${item.failed_at}`)
+    if (typeof item.status === 'number') lines.push(`status: ${item.status}`)
+    lines.push(`method: ${item.method}`)
+    lines.push(`endpoint: ${item.endpoint}`)
+    lines.push(`entity_type: ${item.entity_type}`)
+    lines.push(`entity_id: ${item.entity_id}`)
+    if (item.error_code) lines.push(`error_code: ${item.error_code}`)
+    if (item.error_detail) lines.push(`error_detail: ${item.error_detail}`)
+    if (item.server_snapshot) lines.push(`server_snapshot: ${JSON.stringify(item.server_snapshot)}`)
+    if (item.request_payload) lines.push(`request_payload: ${JSON.stringify(item.request_payload)}`)
+  })
+
+  return lines.join('\n')
+}
+
+const buildSyncDiagnosticsLog = (failure: SyncFailure | null, deadLetters: OutboxDeadLetter[]) => {
+  if (!failure && deadLetters.length === 0) return ''
+
+  const lines = ['[kakeibo sync diagnostics]', `generated_at: ${new Date().toISOString()}`]
+  if (failure) {
+    lines.push('', buildSyncFailureLog(failure))
+  }
+
+  if (deadLetters.length) {
+    lines.push('', buildDeadLetterLog(deadLetters))
+  }
+
+  const events = getRecentSyncEvents(25)
+  if (events.length) {
+    lines.push('', '[kakeibo sync events]')
+    events.forEach((event) => {
+      lines.push(
+        `${event.occurred_at} level=${event.level} stage=${event.stage} message=${event.message}` +
+          `${event.status ? ` status=${event.status}` : ''}` +
+          `${event.error_code ? ` error_code=${event.error_code}` : ''}` +
+          `${event.method ? ` method=${event.method}` : ''}` +
+          `${event.endpoint ? ` endpoint=${event.endpoint}` : ''}`
+      )
+    })
+  }
+
+  return lines.join('\n')
+}
+
+const copyText = async (value: string) => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'absolute'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  document.body.removeChild(textarea)
 }
 
 type AuthScreenProps = {
@@ -725,11 +784,13 @@ const AuthScreen = ({ status, onLogin, error }: AuthScreenProps) => {
       <div className="auth-card">
         <h1>Kakeibo</h1>
         <p className="muted">
-          {isLoading ? 'セッションを確認しています。' : 'Googleアカウントでログインします。'}
+          {isLoading
+            ? 'セッションを確認しています。時間がかかる場合はそのままログインできます。'
+            : 'Googleアカウントでログインします。'}
         </p>
         {error && <p className="auth-error">{error}</p>}
         <div className="auth-actions">
-          <button className="primary full" onClick={onLogin} disabled={isLoading}>
+          <button className="primary full" onClick={onLogin}>
             Googleでログイン
           </button>
         </div>
@@ -750,8 +811,10 @@ function App() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [toast, setToast] = useState<{ message: string; type: 'error' | 'info' } | null>(null)
+  const [syncFailure, setSyncFailure] = useState<SyncFailure | null>(null)
   const [authStatus, setAuthStatus] = useState<'loading' | 'logged-out' | 'ready'>('loading')
   const [authError, setAuthError] = useState<string | null>(null)
+  const [historyMonthYm, setHistoryMonthYm] = useState(() => dayjs().format('YYYY-MM'))
   const toastTimerRef = useRef<number | null>(null)
 
   const entries = useLiveQuery(() => db.entries.orderBy('occurred_at').reverse().toArray(), [])
@@ -760,6 +823,12 @@ function App() {
   const recurringRules = useLiveQuery(() => db.recurringRules.orderBy('created_at').reverse().toArray(), [])
   const monthlyBalances = useLiveQuery(() => db.monthlyBalances.orderBy('ym').toArray(), [])
   const outboxCount = useLiveQuery(() => db.outbox.count(), [])
+  const outboxDeadLetters = useLiveQuery(() => db.outboxDeadLetters.orderBy('failed_at').reverse().limit(10).toArray(), [])
+  const deadLetterCount = useLiveQuery(() => db.outboxDeadLetters.count(), []) ?? 0
+  const syncFailureLog = useMemo(
+    () => buildSyncDiagnosticsLog(syncFailure, outboxDeadLetters ?? []),
+    [syncFailure, outboxDeadLetters]
+  )
 
   const paymentOptions = useMemo<SelectOption[]>(() => {
     return (paymentMethods ?? []).map((method) => ({
@@ -781,8 +850,13 @@ function App() {
   }, [monthlyBalances])
 
   const loadSession = async () => {
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => {
+      controller.abort()
+    }, SESSION_CHECK_TIMEOUT_MS)
+
     try {
-      const response = await apiFetch('/auth/session')
+      const response = await apiFetch('/auth/session', { signal: controller.signal })
       if (!response.ok) {
         setAuthStatus('logged-out')
         return
@@ -798,8 +872,13 @@ function App() {
       }
       setIdentity(data.session.family_id, data.session.user.id)
       setAuthStatus('ready')
-    } catch {
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        setAuthError((current) => current ?? 'セッション確認がタイムアウトしました。ログインして続行してください。')
+      }
       setAuthStatus('logged-out')
+    } finally {
+      window.clearTimeout(timeoutId)
     }
   }
 
@@ -817,7 +896,30 @@ function App() {
   const runSync = async () => {
     const result = await syncOutbox()
     if (!result.ok) {
+      setSyncFailure(result.failure)
       showToast(formatSyncFailureMessage(result.failure))
+      if (result.failure.auth_required) {
+        setAuthError('セッションが切れました。再ログインしてください。')
+        setAuthStatus('logged-out')
+      }
+      return
+    }
+    if (result.dead_letters > 0) {
+      showToast('要対応の同期エラーがあります。詳細をコピーしてください。')
+    }
+    const currentDeadLetterCount = await db.outboxDeadLetters.count()
+    if (currentDeadLetterCount === 0) {
+      setSyncFailure(null)
+    }
+  }
+
+  const handleCopySyncFailureLog = async () => {
+    if (!syncFailureLog) return
+    try {
+      await copyText(syncFailureLog)
+      showToast('同期エラー詳細をコピーしました', 'info')
+    } catch {
+      showToast('同期エラー詳細のコピーに失敗しました')
     }
   }
 
@@ -875,6 +977,67 @@ function App() {
     window.location.href = `${apiBase}/auth/google/start?${params.toString()}`
   }
 
+  const clearLocalData = async () => {
+    await db.transaction(
+      'rw',
+      [
+        db.entries,
+        db.entryCategories,
+        db.paymentMethods,
+        db.recurringRules,
+        db.monthlyBalances,
+        db.outbox,
+        db.outboxDeadLetters,
+      ],
+      async () => {
+        await Promise.all([
+          db.entries.clear(),
+          db.entryCategories.clear(),
+          db.paymentMethods.clear(),
+          db.recurringRules.clear(),
+          db.monthlyBalances.clear(),
+          db.outbox.clear(),
+          db.outboxDeadLetters.clear(),
+        ])
+      }
+    )
+    localStorage.removeItem('family_id')
+    localStorage.removeItem('user_id')
+    localStorage.removeItem('last_sync')
+    localStorage.removeItem('sync_cursor')
+    localStorage.removeItem('sync_event_buffer')
+  }
+
+  const handleLogout = async () => {
+    setMenuOpen(false)
+    const confirmed = window.confirm('ログアウトしてこの端末のデータを削除します。よろしいですか？')
+    if (!confirmed) return
+
+    try {
+      await apiFetch('/auth/logout', { method: 'POST' })
+    } catch {
+      // ローカルデータ削除を優先するため、サーバーログアウト失敗時も続行する。
+    }
+
+    try {
+      await clearLocalData()
+    } catch {
+      showToast('端末データの削除に失敗しました')
+      return
+    }
+
+    setActiveTab('home')
+    setPage('main')
+    setReturnPage('main')
+    setPaymentReturnPage('main')
+    setReturnTab('home')
+    setEntrySeed(null)
+    setPreferredEntryType('expense')
+    setHistoryMonthYm(dayjs().format('YYYY-MM'))
+    setAuthError(null)
+    setAuthStatus('logged-out')
+  }
+
   const handleSaveEntry = async (payload: EntryInputSeed) => {
     const now = new Date().toISOString()
     const existing = payload.id ? (entries ?? []).find((entry) => entry.id === payload.id) : null
@@ -901,19 +1064,25 @@ function App() {
 
     if (existing) {
       await enqueueOutbox({
-        id: crypto.randomUUID(),
         method: 'PATCH',
         endpoint: `/entries/${entry.id}`,
         payload: buildEntryUpdatePayload(entry, existing.updated_at ?? payload.updatedAt ?? null),
         created_at: now,
+        entity_type: 'entries',
+        entity_id: entry.id,
+        operation: 'upsert',
+        base_updated_at: existing.updated_at ?? payload.updatedAt ?? null,
       })
     } else {
       await enqueueOutbox({
-        id: crypto.randomUUID(),
         method: 'POST',
         endpoint: '/entries',
         payload: buildEntryCreatePayload(entry),
         created_at: now,
+        entity_type: 'entries',
+        entity_id: entry.id,
+        operation: 'upsert',
+        base_updated_at: null,
       })
     }
 
@@ -932,19 +1101,23 @@ function App() {
       )
     }
     await enqueueOutbox({
-      id: crypto.randomUUID(),
       method: 'DELETE',
       endpoint: `/entries/${entryId}`,
       payload: null,
       created_at: new Date().toISOString(),
+      entity_type: 'entries',
+      entity_id: entryId,
+      operation: 'delete',
+      base_updated_at: existing?.updated_at ?? null,
     })
     void runSync()
   }
 
   const handleSaveCategory = async (category: EntryCategory) => {
+    const existing = await db.entryCategories.get(category.id)
+    const baseUpdatedAt = existing?.updated_at ?? null
     await db.entryCategories.put(category)
     await enqueueOutbox({
-      id: crypto.randomUUID(),
       method: 'POST',
       endpoint: '/entry-categories',
       payload: {
@@ -954,9 +1127,13 @@ function App() {
         icon_key: category.icon_key ?? null,
         color: category.color ?? null,
         sort_order: category.sort_order,
-        client_updated_at: category.updated_at,
+        base_updated_at: baseUpdatedAt,
       },
       created_at: new Date().toISOString(),
+      entity_type: 'entry_categories',
+      entity_id: category.id,
+      operation: 'upsert',
+      base_updated_at: baseUpdatedAt,
     })
     void runSync()
   }
@@ -981,11 +1158,14 @@ function App() {
   const handleDeleteCategory = async (category: EntryCategory) => {
     await db.entryCategories.delete(category.id)
     await enqueueOutbox({
-      id: crypto.randomUUID(),
       method: 'DELETE',
       endpoint: `/entry-categories/${category.id}`,
       payload: null,
       created_at: new Date().toISOString(),
+      entity_type: 'entry_categories',
+      entity_id: category.id,
+      operation: 'delete',
+      base_updated_at: category.updated_at ?? null,
     })
 
     void runSync()
@@ -1005,7 +1185,6 @@ function App() {
 
     await db.paymentMethods.put(method)
     await enqueueOutbox({
-      id: crypto.randomUUID(),
       method: 'POST',
       endpoint: '/payment-methods',
       payload: {
@@ -1013,9 +1192,13 @@ function App() {
         name: method.name,
         type: method.type,
         sort_order: method.sort_order,
-        client_updated_at: method.updated_at,
+        base_updated_at: null,
       },
       created_at: now,
+      entity_type: 'payment_methods',
+      entity_id: method.id,
+      operation: 'upsert',
+      base_updated_at: null,
     })
 
     void runSync()
@@ -1024,20 +1207,24 @@ function App() {
   const handleDeletePaymentMethod = async (method: PaymentMethod) => {
     await db.paymentMethods.delete(method.id)
     await enqueueOutbox({
-      id: crypto.randomUUID(),
       method: 'DELETE',
       endpoint: `/payment-methods/${method.id}`,
       payload: null,
       created_at: new Date().toISOString(),
+      entity_type: 'payment_methods',
+      entity_id: method.id,
+      operation: 'delete',
+      base_updated_at: method.updated_at ?? null,
     })
 
     void runSync()
   }
 
   const handleSaveRecurringRule = async (recurringRule: RecurringRule) => {
+    const existing = await db.recurringRules.get(recurringRule.id)
+    const baseUpdatedAt = existing?.updated_at ?? null
     await db.recurringRules.put(recurringRule)
     await enqueueOutbox({
-      id: crypto.randomUUID(),
       method: 'POST',
       endpoint: '/recurring-rules',
       payload: {
@@ -1053,9 +1240,13 @@ function App() {
         end_at: recurringRule.end_at,
         is_active: recurringRule.is_active,
         holiday_adjustment: recurringRule.holiday_adjustment ?? 'none',
-        client_updated_at: recurringRule.updated_at,
+        base_updated_at: baseUpdatedAt,
       },
       created_at: new Date().toISOString(),
+      entity_type: 'recurring_rules',
+      entity_id: recurringRule.id,
+      operation: 'upsert',
+      base_updated_at: baseUpdatedAt,
     })
 
     void runSync()
@@ -1064,11 +1255,14 @@ function App() {
   const handleDeleteRecurringRule = async (rule: RecurringRule) => {
     await db.recurringRules.delete(rule.id)
     await enqueueOutbox({
-      id: crypto.randomUUID(),
       method: 'DELETE',
       endpoint: `/recurring-rules/${rule.id}`,
       payload: null,
       created_at: new Date().toISOString(),
+      entity_type: 'recurring_rules',
+      entity_id: rule.id,
+      operation: 'delete',
+      base_updated_at: rule.updated_at ?? null,
     })
 
     void runSync()
@@ -1186,7 +1380,11 @@ function App() {
         </div>
         {showSync ? (
           <button className="ghost" onClick={handleSync} disabled={syncing}>
-            {syncing ? '同期中' : `更新${outboxCount ? ` (${outboxCount})` : ''}`}
+            {syncing
+              ? '同期中'
+              : deadLetterCount > 0
+                ? `要対応 (${deadLetterCount})`
+                : `更新${outboxCount ? ` (${outboxCount})` : ''}`}
           </button>
         ) : (
           <div />
@@ -1255,6 +1453,8 @@ function App() {
             paymentMap={paymentMap}
             monthlyBalanceMap={monthlyBalanceMap}
             recurringRules={recurringRules ?? []}
+            currentMonthYm={historyMonthYm}
+            onChangeMonthYm={setHistoryMonthYm}
             defaultEntryType={preferredEntryType}
             defaultPaymentMethodId={paymentMethods?.[0]?.id ?? null}
             onOpenEntryInput={handleOpenEntryInput}
@@ -1354,6 +1554,7 @@ function App() {
             onClick={() => handleOpenPage('recurring-settings')}
           />
           <MenuItem icon={<IconSettings />} label="支払い設定" onClick={() => handleOpenPage('other-settings')} />
+          <MenuItem icon={renderMaterialIcon('logout')} label="ログアウト（データ削除）" onClick={handleLogout} variant="danger" />
         </div>
       </div>
 
@@ -1362,6 +1563,13 @@ function App() {
       {toast && (
         <div className={`toast ${toast.type}`} role="status" aria-live="polite">
           {toast.message}
+        </div>
+      )}
+      {syncFailureLog && (
+        <div className="sync-error-copy-wrap">
+          <button className="sync-error-copy-button" onClick={handleCopySyncFailureLog}>
+            {deadLetterCount > 0 ? `同期エラー詳細をコピー (${deadLetterCount})` : '同期ログをコピー'}
+          </button>
         </div>
       )}
     </div>
@@ -1373,10 +1581,11 @@ type MenuItemProps = {
   label: string
   onClick?: () => void
   disabled?: boolean
+  variant?: 'default' | 'danger'
 }
 
-const MenuItem = ({ icon, label, onClick, disabled }: MenuItemProps) => (
-  <button className={`menu-item ${disabled ? 'disabled' : ''}`} onClick={onClick} disabled={disabled}>
+const MenuItem = ({ icon, label, onClick, disabled, variant = 'default' }: MenuItemProps) => (
+  <button className={`menu-item ${disabled ? 'disabled' : ''} ${variant}`} onClick={onClick} disabled={disabled}>
     <span className="menu-icon">{icon}</span>
     <span>{label}</span>
   </button>
@@ -1545,10 +1754,17 @@ const EntryInputPage = ({
   const [freshInput, setFreshInput] = useState(!seed.amount)
   const [operationUsed, setOperationUsed] = useState(false)
   const [awaitingSubmit, setAwaitingSubmit] = useState(false)
+  const [showCategorySheet, setShowCategorySheet] = useState(false)
+  const [categorySheetType, setCategorySheetType] = useState<EntryType>(seed.entryType)
 
-  const visibleCategories = useMemo(() => {
-    return categories.filter((category) => category.type === entryType)
-  }, [categories, entryType])
+  const categoriesByType = useMemo(
+    () => ({
+      income: categories.filter((category) => category.type === 'income'),
+      expense: categories.filter((category) => category.type === 'expense'),
+    }),
+    [categories]
+  )
+  const visibleCategories = categoriesByType[entryType]
   const resolvedEntryCategoryId = visibleCategories.some((category) => category.id === entryCategoryId)
     ? entryCategoryId
     : ''
@@ -1673,63 +1889,64 @@ const EntryInputPage = ({
   const paymentLabel =
     paymentMethods.find((method) => method.id === paymentMethodId)?.name ?? '支払い方法'
 
-  const handleEntryTypeChange = (nextType: EntryType) => {
+  const handleApplyEntryType = (nextType: EntryType) => {
     setEntryType(nextType)
-    const nextCategories = categories.filter((category) => category.type === nextType)
-    setEntryCategoryId(nextCategories[0]?.id ?? '')
+    const nextCategories = categoriesByType[nextType]
+    setEntryCategoryId((current) => {
+      if (!current) return ''
+      return nextCategories.some((category) => category.id === current) ? current : ''
+    })
     onEntryTypeChange?.(nextType)
+  }
+
+  const handleOpenCategorySheet = () => {
+    setCategorySheetType(entryType)
+    setShowCategorySheet(true)
+  }
+
+  const handlePickCategory = (nextType: EntryType, nextCategoryId: string | null) => {
+    handleApplyEntryType(nextType)
+    setEntryCategoryId(nextCategoryId ?? '')
+    setCategorySheetType(nextType)
+    setShowCategorySheet(false)
   }
 
   return (
     <section className="card entry-input">
       <div className="entry-meta">
-        <div className="entry-date">
+        <label className="entry-meta-field entry-meta-field-date">
+          <span className="entry-meta-label">日付</span>
           <input
             type="date"
+            className="entry-meta-input entry-meta-input-date"
             value={dateValue}
             onChange={(event) => setDateValue(event.target.value)}
           />
-        </div>
-        <input
-          type="time"
-          className="entry-time"
-          value={timeValue}
-          onChange={(event) => setTimeValue(event.target.value)}
-        />
+        </label>
+        <label className="entry-meta-field entry-meta-field-time">
+          <span className="entry-meta-label">時間</span>
+          <input
+            type="time"
+            className="entry-meta-input entry-meta-input-time"
+            value={timeValue}
+            onChange={(event) => setTimeValue(event.target.value)}
+          />
+        </label>
       </div>
 
       <div className="entry-row">
         <span
-          className="category-icon"
+          className="category-icon entry-row-icon"
           style={{ background: selectedCategory?.color ?? '#d9554c' }}
         >
           {selectedCategory ? getCategoryIcon(selectedCategory.icon_key) ?? selectedCategory.name.slice(0, 1) : '?'}
         </span>
         <div className="entry-row-controls">
-          <select value={resolvedEntryCategoryId} onChange={(event) => setEntryCategoryId(event.target.value)}>
-            <option value="">カテゴリ</option>
-            {visibleCategories.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
-          </select>
-          <div className="pill-toggle entry-type-toggle">
-            <button
-              type="button"
-              className={entryType === 'income' ? 'active' : ''}
-              onClick={() => handleEntryTypeChange('income')}
-            >
-              収入
-            </button>
-            <button
-              type="button"
-              className={entryType === 'expense' ? 'active' : ''}
-              onClick={() => handleEntryTypeChange('expense')}
-            >
-              支出
-            </button>
-          </div>
+          <button type="button" className="entry-category-trigger" onClick={handleOpenCategorySheet}>
+            <span className="entry-inline-label">カテゴリ</span>
+            <span className="entry-category-name">{selectedCategory?.name ?? 'カテゴリを選択'}</span>
+            <span className="entry-category-arrow">{renderMaterialIcon('expand_more')}</span>
+          </button>
         </div>
       </div>
 
@@ -1816,6 +2033,82 @@ const EntryInputPage = ({
           {primaryLabel}
         </button>
       </div>
+
+      {showCategorySheet && (
+        <div
+          className="sheet"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setShowCategorySheet(false)
+            }
+          }}
+        >
+          <div className="sheet-card entry-category-sheet" role="dialog" aria-modal="true" aria-label="カテゴリ選択">
+            <h3>カテゴリ選択</h3>
+            <div className="pill-toggle entry-type-toggle">
+              <button
+                type="button"
+                className={categorySheetType === 'expense' ? 'active' : ''}
+                onClick={() => setCategorySheetType('expense')}
+              >
+                支出
+              </button>
+              <button
+                type="button"
+                className={categorySheetType === 'income' ? 'active' : ''}
+                onClick={() => setCategorySheetType('income')}
+              >
+                収入
+              </button>
+            </div>
+            <ul className="entry-category-options">
+              <li>
+                <button
+                  type="button"
+                  className={`entry-category-option ${
+                    categorySheetType === entryType && !resolvedEntryCategoryId ? 'active' : ''
+                  }`}
+                  onClick={() => handlePickCategory(categorySheetType, null)}
+                >
+                  <span className="category-icon entry-category-option-icon" style={{ background: '#8f9499' }}>
+                    {renderMaterialIcon('category')}
+                  </span>
+                  <span className="entry-category-option-name">未分類</span>
+                  <span className="entry-category-option-check">
+                    {categorySheetType === entryType && !resolvedEntryCategoryId ? renderMaterialIcon('check') : null}
+                  </span>
+                </button>
+              </li>
+              {categoriesByType[categorySheetType].map((category, index) => {
+                const color = category.color ?? CATEGORY_COLORS[index % CATEGORY_COLORS.length]
+                const isActive = categorySheetType === entryType && category.id === resolvedEntryCategoryId
+                return (
+                  <li key={category.id}>
+                    <button
+                      type="button"
+                      className={`entry-category-option ${isActive ? 'active' : ''}`}
+                      onClick={() => handlePickCategory(categorySheetType, category.id)}
+                    >
+                      <span className="category-icon entry-category-option-icon" style={{ background: color }}>
+                        {getCategoryIcon(category.icon_key) ?? (
+                          <span className="category-fallback">{category.name.slice(0, 1)}</span>
+                        )}
+                      </span>
+                      <span className="entry-category-option-name">{category.name}</span>
+                      <span className="entry-category-option-check">{isActive ? renderMaterialIcon('check') : null}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+            <div className="sheet-actions">
+              <button type="button" className="ghost" onClick={() => setShowCategorySheet(false)}>
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
 }
@@ -1826,6 +2119,8 @@ type HistoryTabProps = {
   paymentMap: Map<string, PaymentMethod>
   monthlyBalanceMap: Map<string, MonthlyBalance>
   recurringRules: RecurringRule[]
+  currentMonthYm: string
+  onChangeMonthYm: (ym: string) => void
   onEdit: (entry: Entry) => void
   onOpenEntryInput: (seed: EntryInputSeed, tab?: TabKey) => void
   defaultEntryType: EntryType
@@ -1838,19 +2133,20 @@ const HistoryTab = ({
   paymentMap,
   monthlyBalanceMap,
   recurringRules,
+  currentMonthYm,
+  onChangeMonthYm,
   onEdit,
   onOpenEntryInput,
   defaultEntryType,
   defaultPaymentMethodId,
 }: HistoryTabProps) => {
   const [view, setView] = useState<'list' | 'calendar'>('calendar')
-  const [currentMonth, setCurrentMonth] = useState(dayjs())
-  const [selectedDate, setSelectedDate] = useState(() => dayjs().format('YYYY-MM-DD'))
+  const currentMonth = useMemo(() => parseMonthYm(currentMonthYm), [currentMonthYm])
+  const [selectedDate, setSelectedDate] = useState(() => getDefaultSelectedDateForMonth(parseMonthYm(currentMonthYm)))
   const weekdayLabels = ['日', '月', '火', '水', '木', '金', '土']
   const displayYm = currentMonth.format('YYYY-MM')
   const balanceYm = currentMonth.subtract(1, 'month').format('YYYY-MM')
   const carryoverBalance = monthlyBalanceMap.get(balanceYm)?.balance ?? null
-
 
   const monthEntries = useMemo(() => {
     return entries.filter((entry) => dayjs(getEntryDateKey(entry)).isSame(currentMonth, 'month'))
@@ -1910,10 +2206,9 @@ const HistoryTab = ({
   }, [carryoverBalance, displayYm])
 
   const handleChangeMonth = (delta: number) => {
-    const next = currentMonth.add(delta, 'month')
-    setCurrentMonth(next)
-    const base = dayjs().isSame(next, 'month') ? dayjs() : next.startOf('month')
-    setSelectedDate(base.format('YYYY-MM-DD'))
+    const next = currentMonth.add(delta, 'month').startOf('month')
+    onChangeMonthYm(next.format('YYYY-MM'))
+    setSelectedDate(getDefaultSelectedDateForMonth(next))
   }
 
   const monthTotals = useMemo(() => {
@@ -2272,9 +2567,7 @@ type ReportsTabProps = {
 const ReportsTab = ({ entries, categories, monthlyBalanceMap }: ReportsTabProps) => {
   const [range, setRange] = useState<'week' | 'month' | 'year'>('month')
   const [reportType, setReportType] = useState<EntryType>('expense')
-  const [chartType, setChartType] = useState<'donut' | 'bar'>('donut')
   const [reportOffset, setReportOffset] = useState(0)
-  const barScrollRef = useRef<HTMLDivElement | null>(null)
 
   const rangeUnit = range === 'week' ? 'week' : range === 'year' ? 'year' : 'month'
   const baseDate = useMemo(() => dayjs().add(reportOffset, rangeUnit), [reportOffset, rangeUnit])
@@ -2341,21 +2634,6 @@ const ReportsTab = ({ entries, categories, monthlyBalanceMap }: ReportsTabProps)
   const activeTotal = report.summary[reportType]
   const categoryTotals = report.categoryTotalsByType[reportType]
   const donutSegments = categoryTotals.filter((item) => item.total > 0)
-  const series = useMemo(
-    () => buildReportSeries(reportEntries, range, reportType, baseDate),
-    [reportEntries, range, reportType, baseDate]
-  )
-  useEffect(() => {
-    if (chartType !== 'bar') return
-    if (range === 'week') return
-    const container = barScrollRef.current
-    if (!container) return
-    const focusKey = range === 'year' ? baseDate.format('YYYY-MM') : baseDate.format('YYYY-MM-DD')
-    const target = container.querySelector(`[data-key="${focusKey}"]`) as HTMLElement | null
-    if (!target) return
-    const left = target.offsetLeft - container.clientWidth / 2 + target.clientWidth / 2
-    container.scrollTo({ left: Math.max(0, left), behavior: 'smooth' })
-  }, [chartType, range, baseDate, series])
 
   const donutGradient = useMemo(() => {
     if (!donutSegments.length) return 'conic-gradient(#e0e0e0 0 100%)'
@@ -2398,49 +2676,17 @@ const ReportsTab = ({ entries, categories, monthlyBalanceMap }: ReportsTabProps)
       </div>
 
       <div className="report-toggle">
-        <div className="report-toggle-group">
-          <button className={chartType === 'bar' ? 'active' : ''} onClick={() => setChartType('bar')}>
-            <IconBar />
-          </button>
-          <button className={chartType === 'donut' ? 'active' : ''} onClick={() => setChartType('donut')}>
-            <IconChart />
-          </button>
-        </div>
         <button type="button" className="report-type" onClick={() => setReportType(reportType === 'expense' ? 'income' : 'expense')}>
           {reportType === 'expense' ? '支出' : '収入'}
         </button>
       </div>
 
-      {chartType === 'donut' ? (
-        <div className="donut" style={{ background: donutGradient }}>
-          <div className="donut-center">
-            <span>{reportType === 'expense' ? '支出' : '収入'}</span>
-            <strong>¥{formatAmount(activeTotal)}</strong>
-          </div>
+      <div className="donut" style={{ background: donutGradient }}>
+        <div className="donut-center">
+          <span>{reportType === 'expense' ? '支出' : '収入'}</span>
+          <strong>¥{formatAmount(activeTotal)}</strong>
         </div>
-      ) : (
-        <div className="bar-scroll" ref={barScrollRef}>
-          <div className={`bar-chart ${series.length <= 7 ? 'bar-chart-full' : ''}`}>
-            {(() => {
-              const maxValue = Math.max(...series.map((item) => item.total), 1)
-              const maxBarHeight = 80
-              return series.map((point) => {
-                const height = Math.round((point.total / maxValue) * maxBarHeight)
-                const barHeight = point.total > 0 ? Math.max(4, height) : 4
-                return (
-                  <div key={point.key} className="bar-item" data-key={point.key}>
-                    <span className="bar-amount">¥{formatAmount(point.total)}</span>
-                    <div className="bar-stack">
-                      <div className="bar-value" style={{ height: `${barHeight}px` }} />
-                      <span className="bar-label">{point.label}</span>
-                    </div>
-                  </div>
-                )
-              })
-            })()}
-          </div>
-        </div>
-      )}
+      </div>
 
       <div className="summary-strip">
         <div>
@@ -2692,7 +2938,7 @@ const CategorySettingsPage = ({ categories, onAdd, onSave, onDelete }: CategoryS
       name: editName.trim(),
       icon_key: editIconKey,
       color: editColor,
-      updated_at: new Date().toISOString(),
+      updated_at: editingCategory.updated_at,
     }
     onSave(updated)
     setEditingCategory(null)
@@ -3010,7 +3256,7 @@ const RecurringSettingsPage = ({ rules, categories, paymentMethods, onAdd, onSav
         day_of_month: parsedDayOfMonth,
         holiday_adjustment: holidayAdjustment,
         start_at: startAt,
-        updated_at: new Date().toISOString(),
+        updated_at: editingRule.updated_at,
       }
       onSave(updated)
     } else {
