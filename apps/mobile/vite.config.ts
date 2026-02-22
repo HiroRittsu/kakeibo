@@ -8,6 +8,12 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      workbox: {
+        // Do not serve SPA fallback for API/auth routes.
+        navigateFallbackDenylist: [
+          /^\/(auth|sync|bootstrap|entries|entry-categories|payment-methods|recurring-rules|monthly-balance|monthly-balances|reports|audit-logs|health)(\/|$)/,
+        ],
+      },
       includeAssets: [
         'icons/icon-192.png',
         'icons/icon-512.png',

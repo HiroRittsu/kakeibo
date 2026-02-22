@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 
 export type Bindings = {
   DB: D1Database
+  ASSETS: Fetcher
   GOOGLE_CLIENT_ID?: string
   GOOGLE_CLIENT_SECRET?: string
   APP_ORIGIN?: string

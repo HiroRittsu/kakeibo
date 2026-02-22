@@ -39,6 +39,9 @@ export type PaymentMethod = {
   type: string
   icon_key?: string | null
   color?: string | null
+  card_closing_day?: number | null
+  card_payment_day?: number | null
+  linked_bank_payment_method_id?: string | null
   sort_order: number
   created_at: string
   updated_at: string

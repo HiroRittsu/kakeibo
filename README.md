@@ -43,19 +43,46 @@ apps/api/node_modules/.bin/wrangler dev --test-scheduled --local --persist-to .w
 ### リモート
 ```
 npm run migrate:remote --prefix apps/api
+VITE_API_BASE_URL=https://kakeibo.zq1012noza.workers.dev npm run build --prefix apps/mobile
 npm run deploy --prefix apps/api
-npm run build --prefix apps/mobile
-apps/api/node_modules/.bin/wrangler pages deploy apps/mobile/dist --project-name kakeibo-mobile --commit-dirty=true
 ```
 - Cronは `apps/api/wrangler.jsonc` の `triggers.crons` で設定（UTC基準、JSTは+9時間）
 
 ### 環境変数（API）
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` をWranglerのSecretで設定
-- `APP_ORIGIN` にフロントのURLを設定（例: `https://kakeibo-mobile.pages.dev`）
-- `ALLOWED_ORIGINS` にCORS許可するOriginをカンマ区切りで指定（例: `https://kakeibo-mobile.pages.dev,http://127.0.0.1:5173`）
+- `APP_ORIGIN` は `apps/api/wrangler.jsonc` の `vars` で設定（既定: `https://kakeibo.zq1012noza.workers.dev`）
+- `ALLOWED_ORIGINS` は `apps/api/wrangler.jsonc` の `vars` で設定（既定: `https://kakeibo.zq1012noza.workers.dev,http://127.0.0.1:5173`）
 
 ### 環境変数（Mobile）
-- `VITE_API_BASE_URL` にAPIのURLを設定（例: `https://api.zq1012noza.workers.dev`）
+- `VITE_API_BASE_URL` は `https://kakeibo.zq1012noza.workers.dev` を使用
+- `deploy.sh` は `WORKER_ORIGIN` / `VITE_API_BASE_URL` を外部から上書き可能
+
+### workers.dev統合構成
+1. API Worker名を `kakeibo` とし、`https://kakeibo.zq1012noza.workers.dev` で稼働する
+2. `apps/mobile/dist` を Worker Assets として同じWorkerから配信する
+3. APIは同一オリジン（`/auth`, `/sync`, `/entries` など）で処理する
+
+### OAuth設定（Google Cloud）
+1. OAuthクライアントの Authorized redirect URI に `https://kakeibo.zq1012noza.workers.dev/auth/google/callback` を追加
+2. 旧URLを使っている場合は切替確認後に削除する
+
+### デプロイ手順（統合Worker）
+1. `./deploy.sh` を実行する
+2. 反映後に `https://kakeibo.zq1012noza.workers.dev/health` を確認する
+
+### 切替後チェック
+1. iOS Safariで `https://kakeibo.zq1012noza.workers.dev` からGoogleログインし、ログイン画面を抜けられる
+2. iOS Chromeで同様にログインできる
+3. `GET /auth/session` が `200` かつ `session.status=ready` を返す
+4. 未許可ユーザーで `auth_error=not_allowed` が表示される
+5. ログアウト後に再ログインできる
+6. 認証後に `/bootstrap` と `/sync` が成功する
+
+### 切戻し手順
+1. 旧 Worker URL がある場合は `VITE_API_BASE_URL` と OAuth redirect URI を旧URLへ戻す
+2. API/Mobile を再デプロイして復旧確認する
+
+詳細な運用手順は `docs/same-site-domain-cutover.md` を参照。
 
 ## 主要要件
 - 無料枠に収めるため低運用コストで進める。

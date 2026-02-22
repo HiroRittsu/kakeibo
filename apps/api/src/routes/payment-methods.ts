@@ -68,6 +68,15 @@ const withReceiptResponse = async (
   return c.json(params.body, status)
 }
 
+const parseCardDay = (value: unknown): number | null | 'invalid' => {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN
+  if (!Number.isFinite(parsed)) return 'invalid'
+  const normalized = Math.trunc(parsed)
+  if (normalized < 1 || normalized > 31) return 'invalid'
+  return normalized
+}
+
 export const registerPaymentMethodRoutes = (app: Hono<HonoEnv>) => {
   app.get('/payment-methods', async (c) => {
     const familyId = requireFamilyId(c)
@@ -119,7 +128,33 @@ export const registerPaymentMethodRoutes = (app: Hono<HonoEnv>) => {
     const iconKey =
       typeof payload.icon_key === 'string' && payload.icon_key.trim() ? payload.icon_key.trim() : null
     const color = typeof payload.color === 'string' && payload.color.trim() ? payload.color.trim() : null
+    const parsedCardClosingDay = parseCardDay(payload.card_closing_day)
+    if (parsedCardClosingDay === 'invalid') {
+      return c.json(jsonError('card_closing_day must be between 1 and 31'), 400)
+    }
+    const parsedCardPaymentDay = parseCardDay(payload.card_payment_day)
+    if (parsedCardPaymentDay === 'invalid') {
+      return c.json(jsonError('card_payment_day must be between 1 and 31'), 400)
+    }
+    const linkedBankPaymentMethodIdRaw =
+      typeof payload.linked_bank_payment_method_id === 'string' && payload.linked_bank_payment_method_id.trim()
+        ? payload.linked_bank_payment_method_id.trim()
+        : null
     if (!name || !type) return c.json(jsonError('name and type are required'), 400)
+
+    const cardClosingDay = type === 'card' ? parsedCardClosingDay : null
+    const cardPaymentDay = type === 'card' ? parsedCardPaymentDay : null
+    const linkedBankPaymentMethodId = type === 'card' ? linkedBankPaymentMethodIdRaw : null
+
+    if (type === 'card' && linkedBankPaymentMethodId) {
+      const linkedBank = await c.env.DB
+        .prepare('SELECT id FROM payment_methods WHERE id = ? AND family_id = ? AND type = ?')
+        .bind(linkedBankPaymentMethodId, familyId, 'bank')
+        .first<{ id: string }>()
+      if (!linkedBank?.id) {
+        return c.json(jsonError('linked_bank_payment_method_id must be a bank account'), 400)
+      }
+    }
 
     const id = typeof payload.id === 'string' ? payload.id : crypto.randomUUID()
     const sortOrder = typeof payload.sort_order === 'number' ? Math.round(payload.sort_order) : 0
@@ -140,6 +175,9 @@ export const registerPaymentMethodRoutes = (app: Hono<HonoEnv>) => {
       existing.type === type &&
       existing.icon_key === iconKey &&
       existing.color === color &&
+      existing.card_closing_day === cardClosingDay &&
+      existing.card_payment_day === cardPaymentDay &&
+      existing.linked_bank_payment_method_id === linkedBankPaymentMethodId &&
       existing.sort_order === sortOrder
 
     if (matchesExisting) {
@@ -159,9 +197,22 @@ export const registerPaymentMethodRoutes = (app: Hono<HonoEnv>) => {
 
     await c.env.DB
       .prepare(
-        'INSERT INTO payment_methods (id, family_id, name, type, icon_key, color, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, icon_key = excluded.icon_key, color = excluded.color, sort_order = excluded.sort_order, updated_at = excluded.updated_at'
+        'INSERT INTO payment_methods (id, family_id, name, type, icon_key, color, card_closing_day, card_payment_day, linked_bank_payment_method_id, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, icon_key = excluded.icon_key, color = excluded.color, card_closing_day = excluded.card_closing_day, card_payment_day = excluded.card_payment_day, linked_bank_payment_method_id = excluded.linked_bank_payment_method_id, sort_order = excluded.sort_order, updated_at = excluded.updated_at'
       )
-      .bind(id, familyId, name, type, iconKey, color, sortOrder, createdAt, updatedAt)
+      .bind(
+        id,
+        familyId,
+        name,
+        type,
+        iconKey,
+        color,
+        cardClosingDay,
+        cardPaymentDay,
+        linkedBankPaymentMethodId,
+        sortOrder,
+        createdAt,
+        updatedAt
+      )
       .run()
 
     await recordAudit(

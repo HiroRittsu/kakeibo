@@ -20,7 +20,10 @@ const baseUrl = envBaseUrl && envBaseUrl.length > 0 ? envBaseUrl : import.meta.e
 
 export const apiFetch = async (path: string, options: RequestInit = {}) => {
   const headers = new Headers(options.headers)
-  headers.set('Content-Type', 'application/json')
+  const hasBody = options.body !== undefined && options.body !== null
+  if (hasBody && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
   const response = await fetch(`${baseUrl}${path}`, {
     ...options,
     headers,

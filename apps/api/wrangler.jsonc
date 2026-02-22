@@ -1,8 +1,16 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "api",
+  "name": "kakeibo",
   "main": "src/index.ts",
   "compatibility_date": "2026-01-05",
+  "vars": {
+    "APP_ORIGIN": "https://kakeibo.zq1012noza.workers.dev",
+    "ALLOWED_ORIGINS": "https://kakeibo.zq1012noza.workers.dev,http://127.0.0.1:5173"
+  },
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "../mobile/dist"
+  },
   "d1_databases": [
     {
       "binding": "DB",
@@ -16,9 +24,6 @@
   // "compatibility_flags": [
   //   "nodejs_compat"
   // ],
-  // "vars": {
-  //   "MY_VAR": "my-variable"
-  // },
   // "kv_namespaces": [
   //   {
   //     "binding": "MY_KV_NAMESPACE",
