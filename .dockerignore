@@ -1,0 +1,13 @@
+.git
+.github
+.wrangler
+**/.wrangler
+node_modules
+**/node_modules
+apps/api/.dev.vars
+apps/mobile/dist
+.env
+.env.*
+*.log
+npm-debug.log*
+.DS_Store

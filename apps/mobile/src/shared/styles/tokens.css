@@ -1,0 +1,45 @@
+:root {
+  color-scheme: light;
+  --font-family-base: "Noto Sans JP Variable", sans-serif;
+  --accent: #2f8f9d;
+  --accent-dark: #21666f;
+  --accent-soft: #e7f3f5;
+  --accent-border: #b7d5d9;
+  --page-bg: #f3f2ef;
+  --surface: #fff;
+  --surface-muted: #f7fafb;
+  --text-main: #263234;
+  --text-muted: #667278;
+  --line: rgba(33, 102, 111, 0.12);
+  --income: #2f8f9d;
+  --income-soft: #e7f3f5;
+  --expense: #d9554c;
+  --expense-soft: #ffe7e3;
+  --top-bar-height: clamp(62px, 8.2dvh, 76px);
+  --top-nav-height: 56px;
+  --page-padding: 16px;
+  --card-padding: 16px;
+  --control-height: 44px;
+  --fab-size: 56px;
+  --entry-gap: 10px;
+  --calc-key-block: 56px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@media (max-height: 700px) {
+  :root {
+    --top-bar-height: clamp(54px, 8dvh, 64px);
+    --top-nav-height: 50px;
+    --page-padding: 12px;
+    --card-padding: 12px;
+    --control-height: 40px;
+    --fab-size: 48px;
+    --entry-gap: 6px;
+    --calc-key-block: 42px;
+  }
+}
+
+html,
+body {
+  font-family: var(--font-family-base);
+}

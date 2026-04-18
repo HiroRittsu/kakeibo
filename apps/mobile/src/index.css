@@ -4,7 +4,7 @@
 
 body {
   margin: 0;
-  background: #f3f2ef;
+  background: var(--page-bg);
 }
 
 .material-symbols-outlined {

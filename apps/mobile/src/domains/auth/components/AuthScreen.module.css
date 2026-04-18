@@ -1,0 +1,54 @@
+.authScreen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+}
+
+.authCard {
+  width: 100%;
+  max-width: 360px;
+  background: #fff;
+  border-radius: 18px;
+  padding: 24px 20px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+  display: grid;
+  gap: 12px;
+  text-align: center;
+}
+
+.authCard h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.authError {
+  color: var(--expense);
+  font-size: 12px;
+  margin: 0;
+}
+
+.authActions {
+  display: grid;
+  gap: 8px;
+}
+
+.primary {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 999px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.full {
+  width: 100%;
+}

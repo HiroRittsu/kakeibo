@@ -7,6 +7,7 @@ export type Bindings = {
   GOOGLE_CLIENT_SECRET?: string
   APP_ORIGIN?: string
   ALLOWED_ORIGINS?: string
+  DEV_AUTH_BYPASS?: string
 }
 
 export type SessionRow = {

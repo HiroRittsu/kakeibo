@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Kakeibo app maskable icon">
+  <rect width="512" height="512" fill="#21666f"/>
+  <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 -24)">
+    <path d="M140 250 256 158l116 92" stroke-width="24"/>
+    <path d="M176 246v118c0 16 13 29 29 29h102c16 0 29-13 29-29V246" stroke-width="24"/>
+    <path d="M224 262h64" stroke-width="16"/>
+    <path d="M256 262v72" stroke-width="16"/>
+    <path d="M224 302h64" stroke-width="16"/>
+  </g>
+</svg>

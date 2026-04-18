@@ -7,14 +7,8 @@ import type {
   MonthlyBalance,
   OutboxDeadLetter,
   OutboxItem,
-} from './types'
-
-const toTokyoDateString = (value: string) => {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value.slice(0, 10)
-  const tokyo = new Date(date.getTime() + 9 * 60 * 60 * 1000)
-  return tokyo.toISOString().slice(0, 10)
-}
+} from '../types'
+import { toTokyoDateString } from '../shared/utils/date'
 
 const parseOutboxEndpoint = (endpoint: string) => {
   const match = endpoint.match(/^\/([^/?#]+)(?:\/([^/?#]+))?/)

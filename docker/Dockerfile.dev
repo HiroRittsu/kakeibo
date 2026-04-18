@@ -1,0 +1,29 @@
+FROM node:24-bookworm-slim
+
+WORKDIR /workspace
+
+ENV NODE_ENV=development \
+    NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FUND=false \
+    WRANGLER_SEND_METRICS=false
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    update-ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/package-lock.json ./apps/api/
+COPY apps/mobile/package.json ./apps/mobile/
+COPY packages/shared/package.json ./packages/shared/
+
+RUN npm install --workspaces --include-workspace-root
+
+RUN mkdir -p apps/mobile/dist && \
+    printf '<!doctype html><title>Kakeibo dev assets placeholder</title>' > apps/mobile/dist/index.html
+
+COPY . .
+
+EXPOSE 5173 8787
+
+CMD ["bash"]

@@ -1,5 +1,8 @@
 import { type ReactNode } from 'react'
-import type { Entry, EntryCategory, PaymentMethod } from '../types'
+import styles from './EntryButtonsList.module.css'
+import { cx } from '../../../shared/utils/cx'
+import type { PaymentType } from '../../../app/types'
+import type { Entry, EntryCategory, PaymentMethod } from '../../../types'
 
 export type EntryListItem = Entry & {
   is_planned?: boolean
@@ -26,6 +29,24 @@ const defaultMetaBuilder = (entry: EntryListItem) => {
   return memo && memo.length > 0 ? memo : null
 }
 
+type OverlayPaymentType = PaymentType | 'unknown'
+
+const paymentOverlayClassByType: Record<OverlayPaymentType, string> = {
+  cash: styles.cash,
+  bank: styles.bank,
+  emoney: styles.emoney,
+  card: styles.creditCard,
+  unknown: styles.unknown,
+}
+
+const resolveOverlayPaymentType = (method: PaymentMethod | null): OverlayPaymentType => {
+  if (!method) return 'unknown'
+  if (method.type === 'cash' || method.type === 'bank' || method.type === 'emoney' || method.type === 'card') {
+    return method.type
+  }
+  return 'unknown'
+}
+
 export const EntryButtonsList = ({
   entries,
   categoryMap,
@@ -41,19 +62,19 @@ export const EntryButtonsList = ({
   metaBuilder = defaultMetaBuilder,
 }: EntryButtonsListProps) => {
   if (!entries.length) {
-    return emptyMessage ? <p className="muted">{emptyMessage}</p> : null
+    return emptyMessage ? <p className={styles.muted}>{emptyMessage}</p> : null
   }
 
   return (
-    <div className="entry-group-card">
-      <div className="entry-group-list">
+    <div className={styles.entryGroupCard}>
+      <div className={styles.entryGroupList}>
         {entries.map((entry) => {
           const isCarryover = Boolean(entry.is_carryover)
           const isPlanned = Boolean(entry.is_planned)
           const isRecurring = Boolean(entry.recurring_rule_id)
           const category = !isCarryover && entry.entry_category_id ? categoryMap.get(entry.entry_category_id) : null
-          const method = !isCarryover && entry.payment_method_id ? paymentMap.get(entry.payment_method_id) : null
-          const paymentClass = method?.type === 'card' ? 'credit-card' : method?.type ?? 'unknown'
+          const method = !isCarryover && entry.payment_method_id ? (paymentMap.get(entry.payment_method_id) ?? null) : null
+          const paymentClass = paymentOverlayClassByType[resolveOverlayPaymentType(method)]
           const paymentOverlayStyle = method ? { background: getPaymentColor(method), color: '#fff' } : undefined
           const categoryColor = isCarryover ? '#8f9499' : category?.color ?? '#d9554c'
           const categoryIcon = isCarryover ? null : getCategoryIcon(category?.icon_key)
@@ -69,16 +90,20 @@ export const EntryButtonsList = ({
             <button
               key={entry.id}
               type="button"
-              className={`entry-button ${isPlanned ? 'planned' : ''} ${isCarryover ? 'carryover' : ''}`}
+              className={cx(styles.entryButton, isPlanned && styles.entryButtonPlanned)}
               onClick={buttonDisabled ? undefined : () => onEdit(entry)}
               disabled={buttonDisabled}
             >
-              <div className="entry-row-main">
-                <span className="entry-category-icon" style={{ background: categoryColor }}>
-                  {isCarryover ? <span className="material-symbols-outlined">redo</span> : categoryIcon ?? <span className="category-fallback">{categoryFallback}</span>}
+              <div className={styles.entryRowMain}>
+                <span className={styles.entryCategoryIcon} style={{ background: categoryColor }}>
+                  {isCarryover ? (
+                    <span className="material-symbols-outlined">redo</span>
+                  ) : (
+                    categoryIcon ?? <span className={styles.categoryFallback}>{categoryFallback}</span>
+                  )}
                   {showCreatorBadge && !isCarryover && !isPlanned && (
                     <span
-                      className="entry-creator-overlay"
+                      className={styles.entryCreatorOverlay}
                       title={creatorName || 'Googleユーザー'}
                       aria-label={creatorName || 'Googleユーザー'}
                     >
@@ -90,23 +115,25 @@ export const EntryButtonsList = ({
                     </span>
                   )}
                   {!isCarryover && (
-                    <span className={`entry-payment-overlay ${paymentClass}`} style={paymentOverlayStyle}>
+                    <span className={cx(styles.entryPaymentOverlay, paymentClass)} style={paymentOverlayStyle}>
                       {getPaymentIcon(method)}
                     </span>
                   )}
                 </span>
-                <div className="entry-info">
-                  <div className="entry-top-row">
-                    <strong className="entry-name">{categoryLabel}</strong>
-                    {metaText && <span className="entry-memo">{metaText}</span>}
-                    <div className="entry-badges">
-                      <span className={`badge ${entry.entry_type}`}>{entry.entry_type === 'income' ? '収入' : '支出'}</span>
-                      {isCarryover && <span className="badge carryover">繰越し</span>}
-                      {isRecurring && !isCarryover && <span className="badge recurring">定期</span>}
-                      {isPlanned && <span className="badge planned">予定</span>}
+                <div className={styles.entryInfo}>
+                  <div className={styles.entryTopRow}>
+                    <strong className={styles.entryName}>{categoryLabel}</strong>
+                    {metaText && <span className={styles.entryMemo}>{metaText}</span>}
+                    <div className={styles.entryBadges}>
+                      <span className={cx(styles.badge, entry.entry_type === 'income' ? styles.badgeIncome : styles.badgeExpense)}>
+                        {entry.entry_type === 'income' ? '収入' : '支出'}
+                      </span>
+                      {isCarryover && <span className={cx(styles.badge, styles.badgeCarryover)}>繰越し</span>}
+                      {isRecurring && !isCarryover && <span className={cx(styles.badge, styles.badgeRecurring)}>定期</span>}
+                      {isPlanned && <span className={cx(styles.badge, styles.badgePlanned)}>予定</span>}
                     </div>
                   </div>
-                  <div className="entry-amount-row">
+                  <div className={styles.entryAmountRow}>
                     <strong>{amountPrefix}¥{formatAmount(entry.amount)}</strong>
                   </div>
                 </div>

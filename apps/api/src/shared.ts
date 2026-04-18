@@ -41,8 +41,12 @@ export const jsonError = (message: string, status = 400) => ({ message, status }
 
 export const buildExpiryIso = (days: number) => new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString()
 
-const isLocalRequest = (url: string) => {
+export const isLocalRequest = (url: string) => {
   return url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')
+}
+
+export const isDevAuthBypassEnabled = (env: Bindings, url: string) => {
+  return env.DEV_AUTH_BYPASS === 'true' && isLocalRequest(url)
 }
 
 export const setSessionCookie = (c: AppContext, sessionId: string) => {
@@ -263,7 +267,18 @@ export const exchangeGoogleCode = async (
       grant_type: 'authorization_code',
     }),
   })
-  if (!response.ok) return null
+  if (!response.ok) {
+    const detail = await response.text()
+    if (isLocalRequest(redirectUri)) {
+      console.warn('Google OAuth token exchange failed', {
+        status: response.status,
+        statusText: response.statusText,
+        redirectUri,
+        detail,
+      })
+    }
+    return null
+  }
   return (await response.json()) as { id_token?: string }
 }
 

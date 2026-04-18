@@ -4,6 +4,12 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
 export default defineConfig({
+  css: {
+    modules: {
+      generateScopedName: '[local]',
+      localsConvention: 'camelCase',
+    },
+  },
   plugins: [
     react(),
     VitePWA({
@@ -29,7 +35,7 @@ export default defineConfig({
         start_url: '/',
         scope: '/',
         display: 'standalone',
-        theme_color: '#4a4a4a',
+        theme_color: '#21666f',
         background_color: '#f3f2ef',
         icons: [
           {

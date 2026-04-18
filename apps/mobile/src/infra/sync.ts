@@ -1,10 +1,13 @@
 import { apiFetch, getFamilyId } from './api'
-import { db } from '../db'
+import { db } from './db'
 import type { Entry, EntryCategory, PaymentMethod, RecurringRule, OutboxDeadLetter, OutboxItem } from '../types'
+import { toTokyoDateString } from '../shared/utils/date'
+import { buildMonthlyBalanceId } from '../domains/monthly-balance/services/monthlyBalance'
 
 const LAST_SYNC_KEY = 'last_sync'
 const SYNC_CURSOR_KEY = 'sync_cursor'
 const SYNC_EVENT_KEY = 'sync_event_buffer'
+const BOOTSTRAPPED_FAMILY_KEY = 'bootstrapped_family_id'
 
 const MAX_ERROR_DETAIL_LENGTH = 4000
 const SYNC_EVENT_LIMIT = 80
@@ -19,6 +22,8 @@ const getLastSync = () => localStorage.getItem(LAST_SYNC_KEY)
 const setLastSync = (value: string) => localStorage.setItem(LAST_SYNC_KEY, value)
 const getSyncCursor = () => Number(localStorage.getItem(SYNC_CURSOR_KEY) ?? '0')
 const setSyncCursor = (value: number) => localStorage.setItem(SYNC_CURSOR_KEY, String(value))
+const getBootstrappedFamilyId = () => localStorage.getItem(BOOTSTRAPPED_FAMILY_KEY)
+const setBootstrappedFamilyId = (value: string) => localStorage.setItem(BOOTSTRAPPED_FAMILY_KEY, value)
 
 type SyncStage = 'outbox' | 'pull'
 
@@ -212,13 +217,6 @@ const withBaseUpdatedAt = (payload: Record<string, unknown> | null, baseUpdatedA
   return next
 }
 
-const toTokyoDateString = (value: string) => {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value.slice(0, 10)
-  const tokyo = new Date(date.getTime() + 9 * 60 * 60 * 1000)
-  return tokyo.toISOString().slice(0, 10)
-}
-
 const normalizeEntry = (entry: Entry): Entry => {
   if (entry.occurred_on) return entry
   return {
@@ -246,8 +244,6 @@ const applyRecurringRule = async (recurringRule: RecurringRule | null) => {
   if (!recurringRule) return
   await db.recurringRules.put(recurringRule)
 }
-
-const buildMonthlyBalanceId = (familyId: string, ym: string) => `${familyId}:${ym}`
 
 const applyMonthlyBalance = async (row: { ym?: string; balance?: number; is_closed?: number; updated_at?: string }) => {
   if (typeof row.ym !== 'string' || typeof row.balance !== 'number') return
@@ -684,10 +680,10 @@ const fetchBootstrap = async () => {
 
 const syncFromServer = async () => {
   const cursor = getSyncCursor()
+  const familyId = getFamilyId()
 
-  if (!cursor) {
+  if (!cursor || getBootstrappedFamilyId() !== familyId) {
     const bootstrap = await fetchBootstrap()
-    const familyId = getFamilyId()
     const balanceRecords = (bootstrap.monthly_balances ?? []).filter(
       (row) => typeof row.ym === 'string' && typeof row.balance === 'number'
     )
@@ -695,6 +691,13 @@ const syncFromServer = async () => {
       'rw',
       [db.entries, db.entryCategories, db.paymentMethods, db.recurringRules, db.monthlyBalances],
       async () => {
+        await Promise.all([
+          db.entries.clear(),
+          db.entryCategories.clear(),
+          db.paymentMethods.clear(),
+          db.recurringRules.clear(),
+          db.monthlyBalances.clear(),
+        ])
         if (bootstrap.entries?.length) {
           await db.entries.bulkPut(bootstrap.entries.map((entry) => normalizeEntry(entry)))
         }
@@ -722,6 +725,7 @@ const syncFromServer = async () => {
       }
     )
     setSyncCursor(bootstrap.next_cursor)
+    setBootstrappedFamilyId(familyId)
     return bootstrap.server_time
   }
 

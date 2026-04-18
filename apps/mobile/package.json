@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource-variable/noto-sans-jp": "^5.2.10",
     "dayjs": "^1.11.13",
     "dexie": "^4.0.8",
     "dexie-react-hooks": "^1.1.7",

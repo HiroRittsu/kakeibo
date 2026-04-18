@@ -33,6 +33,17 @@ kakeibo/
 
 ## 反映手順（ローカル/リモート）
 ### ローカル
+Dockerを使う場合:
+```
+docker compose up --build
+```
+- Mobile: `http://127.0.0.1:5173`
+- API health check: `http://127.0.0.1:8787/health`
+- Docker開発環境では `DEV_AUTH_BYPASS=true` により、ローカルアクセス時だけ `dev@example.local` / `family-dev` の開発用セッションを自動発行する。
+- Google OAuthをローカルで使う場合は `compose.yaml` の `DEV_AUTH_BYPASS` を `false` にし、`apps/api/.dev.vars` に `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` を設定し、Google Cloud側のAuthorized redirect URIへ `http://127.0.0.1:8787/auth/google/callback` を追加する。
+- ローカルD1は `apps/api/.wrangler/state` に永続化される。作り直す場合は `docker compose down` 後に `apps/api/.wrangler/state` を削除する。
+
+ホスト環境で直接実行する場合:
 ```
 npm run migrate:local --prefix apps/api
 npm run dev --prefix apps/api
