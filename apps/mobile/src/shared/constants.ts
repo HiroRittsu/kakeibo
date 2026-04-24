@@ -21,7 +21,7 @@ export const PAGE_TITLES: Record<PageKey, string> = {
   'recurring-settings': '定期的な収入/支出',
   'payment-settings': '支払い設定',
   'report-category-entities': 'カテゴリ明細',
-  'payment-method-entities': '支払い明細',
+  'payment-method-entities': '口座タイムライン',
 }
 
 export const CATEGORY_COLORS = [
@@ -105,6 +105,7 @@ export const PAYMENT_DEFAULT_COLORS: Record<PaymentType, string> = {
   bank: '#2f6db4',
   emoney: '#2f8f9d',
   card: '#3a4bb8',
+  postpaid: '#6d5bd0',
 }
 
 export const ENTRY_TYPE_LABELS: Record<EntryType, string> = {

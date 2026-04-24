@@ -104,8 +104,10 @@ export default function App() {
       {state.nav.page === 'balance' && (
         <BalancePage
           entries={viewModel.entries}
-          monthlyBalanceMap={viewModel.monthlyBalanceMap}
+          currentMonthYm={state.context.balanceMonthYm}
           paymentMethods={viewModel.orderedPaymentMethods}
+          recurringRules={viewModel.recurringRules}
+          onChangeMonthYm={actions.navigation.setBalanceMonthYm}
           onOpenPayment={actions.navigation.handleOpenPayment}
           onOpenPaymentMethodEntities={actions.navigation.handleOpenPaymentMethodEntities}
         />
@@ -164,10 +166,12 @@ export default function App() {
       )}
       {state.nav.page === 'payment-method-entities' && state.context.paymentMethodSeed && (
         <PaymentMethodEntitiesPage
+          currentMonthYm={state.context.balanceMonthYm}
           seed={state.context.paymentMethodSeed}
           entries={viewModel.entries}
           categoryMap={viewModel.categoryMap}
           paymentMethods={viewModel.orderedPaymentMethods}
+          recurringRules={viewModel.recurringRules}
         />
       )}
     </AppLayout>

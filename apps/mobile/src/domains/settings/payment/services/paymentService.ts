@@ -21,6 +21,7 @@ export const savePaymentMethod = async (method: PaymentMethod) => {
       color: method.color ?? null,
       card_closing_day: normalizeDayOfMonth(method.card_closing_day),
       card_payment_day: normalizeDayOfMonth(method.card_payment_day),
+      funding_source_payment_method_id: method.funding_source_payment_method_id ?? null,
       linked_bank_payment_method_id: method.linked_bank_payment_method_id ?? null,
       sort_order: method.sort_order,
       base_updated_at: baseUpdatedAt,
@@ -38,7 +39,7 @@ export const addPaymentMethod = async (params: {
   type: string
   cardClosingDay: number | null
   cardPaymentDay: number | null
-  linkedBankPaymentMethodId: string | null
+  fundingSourcePaymentMethodId: string | null
   orderedMethods: PaymentMethod[]
 }) => {
   const now = new Date().toISOString()
@@ -51,9 +52,14 @@ export const addPaymentMethod = async (params: {
     type: normalizedType,
     icon_key: getPaymentFallbackIconKey(normalizedType),
     color: PAYMENT_DEFAULT_COLORS[normalizedType],
-    card_closing_day: normalizedType === 'card' ? params.cardClosingDay : null,
-    card_payment_day: normalizedType === 'card' ? params.cardPaymentDay : null,
-    linked_bank_payment_method_id: normalizedType === 'card' ? params.linkedBankPaymentMethodId : null,
+    card_closing_day: normalizedType === 'card' || normalizedType === 'postpaid' ? params.cardClosingDay : null,
+    card_payment_day: normalizedType === 'card' || normalizedType === 'postpaid' ? params.cardPaymentDay : null,
+    funding_source_payment_method_id:
+      normalizedType === 'card' || normalizedType === 'postpaid' || normalizedType === 'emoney'
+        ? params.fundingSourcePaymentMethodId
+        : null,
+    linked_bank_payment_method_id:
+      normalizedType === 'card' || normalizedType === 'postpaid' ? params.fundingSourcePaymentMethodId : null,
     sort_order: maxSortOrder + 1,
     created_at: now,
     updated_at: now,

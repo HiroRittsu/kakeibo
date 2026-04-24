@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "test:balance": "tsc -p tsconfig.scripts.json && printf '{\"type\":\"commonjs\"}' > .tmp-tests/package.json && node .tmp-tests/scripts/test-balance-overview.js",
+    "test:balance:consistency": "tsc -p tsconfig.scripts.json && printf '{\"type\":\"commonjs\"}' > .tmp-tests/package.json && node .tmp-tests/scripts/audit-balance-detail-consistency.js",
     "lint": "eslint .",
     "preview": "vite preview"
   },

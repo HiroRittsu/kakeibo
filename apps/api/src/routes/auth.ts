@@ -45,154 +45,330 @@ const DEV_CATEGORY_SEEDS = [
 ] as const
 
 const DEV_PAYMENT_METHOD_SEEDS = [
-  { id: 'dev-pay-cash', name: '現金', type: 'cash', icon_key: 'payments', color: '#2f8f9d', sort_order: 10 },
-  { id: 'dev-pay-card', name: 'クレジットカード', type: 'credit_card', icon_key: 'credit_card', color: '#2f6db4', sort_order: 20 },
-  { id: 'dev-pay-bank', name: '銀行口座', type: 'bank', icon_key: 'account_balance', color: '#5c6bc0', sort_order: 30 },
+  { id: 'dev-pay-cash-wallet', name: '現金', type: 'cash', icon_key: 'payments', color: '#8a6b55', sort_order: 10 },
+  { id: 'dev-pay-bank-smbc', name: '三井住友銀行', type: 'bank', icon_key: 'account_balance', color: '#2f6db4', sort_order: 20 },
+  { id: 'dev-pay-bank-sbi', name: '住信SBIネット銀行', type: 'bank', icon_key: 'savings', color: '#21666f', sort_order: 30 },
+  {
+    id: 'dev-pay-card-rakuten',
+    name: '楽天カード',
+    type: 'card',
+    icon_key: 'credit_card',
+    color: '#3a4bb8',
+    card_closing_day: 20,
+    card_payment_day: 10,
+    funding_source_payment_method_id: 'dev-pay-bank-smbc',
+    linked_bank_payment_method_id: 'dev-pay-bank-smbc',
+    sort_order: 40,
+  },
+  {
+    id: 'dev-pay-card-jcb',
+    name: 'JCB CARD W',
+    type: 'card',
+    icon_key: 'credit_card',
+    color: '#42558c',
+    card_closing_day: 25,
+    card_payment_day: 12,
+    funding_source_payment_method_id: 'dev-pay-bank-sbi',
+    linked_bank_payment_method_id: 'dev-pay-bank-sbi',
+    sort_order: 50,
+  },
+  {
+    id: 'dev-pay-card-view',
+    name: 'ビューカード',
+    type: 'card',
+    icon_key: 'credit_card',
+    color: '#6d7aa8',
+    card_closing_day: 15,
+    card_payment_day: 5,
+    funding_source_payment_method_id: null,
+    linked_bank_payment_method_id: null,
+    sort_order: 60,
+  },
+  {
+    id: 'dev-pay-postpaid-paidy',
+    name: 'Paidy',
+    type: 'postpaid',
+    icon_key: 'receipt_long',
+    color: '#6d5bd0',
+    card_closing_day: 31,
+    card_payment_day: 27,
+    funding_source_payment_method_id: 'dev-pay-bank-smbc',
+    linked_bank_payment_method_id: 'dev-pay-bank-smbc',
+    sort_order: 65,
+  },
+  {
+    id: 'dev-pay-emoney-suica',
+    name: 'モバイルSuica',
+    type: 'emoney',
+    icon_key: 'account_balance_wallet',
+    color: '#2f8f9d',
+    funding_source_payment_method_id: 'dev-pay-card-rakuten',
+    sort_order: 70,
+  },
 ] as const
 
 const DEV_ENTRY_SEEDS = [
   {
-    id: 'dev-entry-income-salary-202604',
+    id: 'dev-entry-bank-salary-20260401',
     entry_type: 'income',
     amount: 280000,
     entry_category_id: 'dev-cat-income-salary',
-    payment_method_id: 'dev-pay-bank',
+    payment_method_id: 'dev-pay-bank-smbc',
     memo: '4月 給与',
     occurred_at: '2026-04-01T09:00:00.000Z',
     occurred_on: '2026-04-01',
   },
   {
-    id: 'dev-entry-expense-rent-202604',
+    id: 'dev-entry-bank-rent-20260402',
     entry_type: 'expense',
     amount: 82000,
     entry_category_id: 'dev-cat-expense-home',
-    payment_method_id: 'dev-pay-bank',
+    payment_method_id: 'dev-pay-bank-smbc',
     memo: '家賃',
     occurred_at: '2026-04-02T09:00:00.000Z',
     occurred_on: '2026-04-02',
   },
   {
-    id: 'dev-entry-expense-grocery-20260405',
-    entry_type: 'expense',
-    amount: 4280,
-    entry_category_id: 'dev-cat-expense-food',
-    payment_method_id: 'dev-pay-card',
-    memo: 'スーパー',
-    occurred_at: '2026-04-05T10:30:00.000Z',
-    occurred_on: '2026-04-05',
+    id: 'dev-entry-bank-bonus-20260404',
+    entry_type: 'income',
+    amount: 210000,
+    entry_category_id: 'dev-cat-income-bonus',
+    payment_method_id: 'dev-pay-bank-sbi',
+    memo: '特別入金',
+    occurred_at: '2026-04-04T01:30:00.000Z',
+    occurred_on: '2026-04-04',
   },
   {
-    id: 'dev-entry-expense-lunch-20260406',
-    entry_type: 'expense',
-    amount: 1260,
-    entry_category_id: 'dev-cat-expense-dining',
-    payment_method_id: 'dev-pay-card',
-    memo: 'ランチ',
-    occurred_at: '2026-04-06T03:15:00.000Z',
-    occurred_on: '2026-04-06',
-  },
-  {
-    id: 'dev-entry-expense-train-20260407',
-    entry_type: 'expense',
-    amount: 640,
-    entry_category_id: 'dev-cat-expense-transport',
-    payment_method_id: 'dev-pay-cash',
-    memo: '電車',
-    occurred_at: '2026-04-07T23:20:00.000Z',
-    occurred_on: '2026-04-07',
-  },
-  {
-    id: 'dev-entry-expense-utilities-20260410',
-    entry_type: 'expense',
-    amount: 11800,
-    entry_category_id: 'dev-cat-expense-utilities',
-    payment_method_id: 'dev-pay-card',
-    memo: '電気・通信',
-    occurred_at: '2026-04-10T11:00:00.000Z',
-    occurred_on: '2026-04-10',
-  },
-  {
-    id: 'dev-entry-expense-pharmacy-20260412',
-    entry_type: 'expense',
-    amount: 1560,
-    entry_category_id: 'dev-cat-expense-medical',
-    payment_method_id: 'dev-pay-card',
-    memo: '薬局',
-    occurred_at: '2026-04-12T06:45:00.000Z',
-    occurred_on: '2026-04-12',
-  },
-  {
-    id: 'dev-entry-expense-movie-20260413',
-    entry_type: 'expense',
-    amount: 3200,
-    entry_category_id: 'dev-cat-expense-hobby',
-    payment_method_id: 'dev-pay-card',
-    memo: '映画',
-    occurred_at: '2026-04-13T10:10:00.000Z',
-    occurred_on: '2026-04-13',
-  },
-  {
-    id: 'dev-entry-expense-daily-20260415',
-    entry_type: 'expense',
-    amount: 2380,
-    entry_category_id: 'dev-cat-expense-daily',
-    payment_method_id: 'dev-pay-cash',
-    memo: '日用品',
-    occurred_at: '2026-04-15T08:00:00.000Z',
-    occurred_on: '2026-04-15',
-  },
-  {
-    id: 'dev-entry-expense-cafe-20260418',
-    entry_type: 'expense',
-    amount: 780,
-    entry_category_id: 'dev-cat-expense-dining',
-    payment_method_id: 'dev-pay-card',
-    memo: 'カフェ',
-    occurred_at: '2026-04-18T05:30:00.000Z',
-    occurred_on: '2026-04-18',
-  },
-  {
-    id: 'dev-entry-income-side-20260418',
+    id: 'dev-entry-bank-side-20260418',
     entry_type: 'income',
     amount: 24000,
     entry_category_id: 'dev-cat-income-side',
-    payment_method_id: 'dev-pay-bank',
+    payment_method_id: 'dev-pay-bank-smbc',
     memo: '副収入',
     occurred_at: '2026-04-18T12:00:00.000Z',
     occurred_on: '2026-04-18',
   },
   {
-    id: 'dev-entry-expense-grocery-20260324',
+    id: 'dev-entry-bank-home-20260408',
     entry_type: 'expense',
-    amount: 5120,
-    entry_category_id: 'dev-cat-expense-food',
-    payment_method_id: 'dev-pay-card',
-    memo: '3月 食材',
-    occurred_at: '2026-03-24T10:00:00.000Z',
-    occurred_on: '2026-03-24',
+    amount: 18000,
+    entry_category_id: 'dev-cat-expense-home',
+    payment_method_id: 'dev-pay-bank-sbi',
+    memo: '住宅費',
+    occurred_at: '2026-04-08T09:20:00.000Z',
+    occurred_on: '2026-04-08',
   },
   {
-    id: 'dev-entry-expense-social-20260328',
+    id: 'dev-entry-card-rakuten-food-20260405',
     entry_type: 'expense',
-    amount: 6800,
+    amount: 4280,
+    entry_category_id: 'dev-cat-expense-food',
+    payment_method_id: 'dev-pay-card-rakuten',
+    memo: 'スーパー',
+    occurred_at: '2026-04-05T10:30:00.000Z',
+    occurred_on: '2026-04-05',
+  },
+  {
+    id: 'dev-entry-card-rakuten-lunch-20260406',
+    entry_type: 'expense',
+    amount: 1260,
+    entry_category_id: 'dev-cat-expense-dining',
+    payment_method_id: 'dev-pay-card-rakuten',
+    memo: 'ランチ',
+    occurred_at: '2026-04-06T03:15:00.000Z',
+    occurred_on: '2026-04-06',
+  },
+  {
+    id: 'dev-entry-card-rakuten-utilities-20260410',
+    entry_type: 'expense',
+    amount: 11800,
+    entry_category_id: 'dev-cat-expense-utilities',
+    payment_method_id: 'dev-pay-card-rakuten',
+    memo: '電気・通信',
+    occurred_at: '2026-04-10T11:00:00.000Z',
+    occurred_on: '2026-04-10',
+  },
+  {
+    id: 'dev-entry-card-rakuten-pharmacy-20260412',
+    entry_type: 'expense',
+    amount: 1560,
+    entry_category_id: 'dev-cat-expense-medical',
+    payment_method_id: 'dev-pay-card-rakuten',
+    memo: '薬局',
+    occurred_at: '2026-04-12T06:45:00.000Z',
+    occurred_on: '2026-04-12',
+  },
+  {
+    id: 'dev-entry-card-rakuten-daily-20260419',
+    entry_type: 'expense',
+    amount: 9300,
+    entry_category_id: 'dev-cat-expense-daily',
+    payment_method_id: 'dev-pay-card-rakuten',
+    memo: 'まとめ買い',
+    occurred_at: '2026-04-19T08:10:00.000Z',
+    occurred_on: '2026-04-19',
+  },
+  {
+    id: 'dev-entry-card-jcb-clothes-20260407',
+    entry_type: 'expense',
+    amount: 8900,
+    entry_category_id: 'dev-cat-expense-clothes',
+    payment_method_id: 'dev-pay-card-jcb',
+    memo: '春服',
+    occurred_at: '2026-04-07T13:10:00.000Z',
+    occurred_on: '2026-04-07',
+  },
+  {
+    id: 'dev-entry-card-jcb-social-20260414',
+    entry_type: 'expense',
+    amount: 7200,
     entry_category_id: 'dev-cat-expense-social',
-    payment_method_id: 'dev-pay-card',
-    memo: '食事会',
-    occurred_at: '2026-03-28T11:00:00.000Z',
-    occurred_on: '2026-03-28',
+    payment_method_id: 'dev-pay-card-jcb',
+    memo: '会食',
+    occurred_at: '2026-04-14T12:00:00.000Z',
+    occurred_on: '2026-04-14',
+  },
+  {
+    id: 'dev-entry-card-jcb-hobby-20260416',
+    entry_type: 'expense',
+    amount: 3900,
+    entry_category_id: 'dev-cat-expense-hobby',
+    payment_method_id: 'dev-pay-card-jcb',
+    memo: '映画と書籍',
+    occurred_at: '2026-04-16T10:40:00.000Z',
+    occurred_on: '2026-04-16',
+  },
+  {
+    id: 'dev-entry-card-view-train-20260408',
+    entry_type: 'expense',
+    amount: 6400,
+    entry_category_id: 'dev-cat-expense-transport',
+    payment_method_id: 'dev-pay-card-view',
+    memo: '新幹線',
+    occurred_at: '2026-04-08T07:45:00.000Z',
+    occurred_on: '2026-04-08',
+  },
+  {
+    id: 'dev-entry-postpaid-paidy-gadget-20260409',
+    entry_type: 'expense',
+    amount: 12400,
+    entry_category_id: 'dev-cat-expense-hobby',
+    payment_method_id: 'dev-pay-postpaid-paidy',
+    memo: 'ガジェット購入',
+    occurred_at: '2026-04-09T10:00:00.000Z',
+    occurred_on: '2026-04-09',
+  },
+  {
+    id: 'dev-entry-emoney-adjust-20260404',
+    entry_type: 'income',
+    amount: 15000,
+    entry_category_id: 'dev-cat-income-side',
+    payment_method_id: 'dev-pay-emoney-suica',
+    memo: '電子マネー残高調整',
+    occurred_at: '2026-04-04T09:00:00.000Z',
+    occurred_on: '2026-04-04',
+  },
+  {
+    id: 'dev-entry-emoney-train-20260411',
+    entry_type: 'expense',
+    amount: 3200,
+    entry_category_id: 'dev-cat-expense-transport',
+    payment_method_id: 'dev-pay-emoney-suica',
+    memo: '通勤',
+    occurred_at: '2026-04-11T09:15:00.000Z',
+    occurred_on: '2026-04-11',
+  },
+  {
+    id: 'dev-entry-emoney-cafe-20260417',
+    entry_type: 'expense',
+    amount: 1300,
+    entry_category_id: 'dev-cat-expense-dining',
+    payment_method_id: 'dev-pay-emoney-suica',
+    memo: '駅ナカ',
+    occurred_at: '2026-04-17T03:20:00.000Z',
+    occurred_on: '2026-04-17',
+  },
+  {
+    id: 'dev-entry-emoney-store-20260420',
+    entry_type: 'expense',
+    amount: 2000,
+    entry_category_id: 'dev-cat-expense-daily',
+    payment_method_id: 'dev-pay-emoney-suica',
+    memo: 'コンビニ',
+    occurred_at: '2026-04-20T10:20:00.000Z',
+    occurred_on: '2026-04-20',
+  },
+  {
+    id: 'dev-entry-cash-train-20260407',
+    entry_type: 'expense',
+    amount: 640,
+    entry_category_id: 'dev-cat-expense-transport',
+    payment_method_id: 'dev-pay-cash-wallet',
+    memo: '電車',
+    occurred_at: '2026-04-07T23:20:00.000Z',
+    occurred_on: '2026-04-07',
+  },
+  {
+    id: 'dev-entry-cash-daily-20260415',
+    entry_type: 'expense',
+    amount: 2380,
+    entry_category_id: 'dev-cat-expense-daily',
+    payment_method_id: 'dev-pay-cash-wallet',
+    memo: '日用品',
+    occurred_at: '2026-04-15T08:00:00.000Z',
+    occurred_on: '2026-04-15',
   },
 ] as const
 
 const DEV_RECURRING_RULE_SEEDS = [
   {
-    id: 'dev-rule-subscription',
+    id: 'dev-rule-bank-smbc-income',
+    entry_type: 'income',
+    amount: 18000,
+    entry_category_id: 'dev-cat-income-side',
+    payment_method_id: 'dev-pay-bank-smbc',
+    memo: '副収入振込',
+    frequency: 'monthly',
+    day_of_month: 25,
+    start_at: '2026-04-01T00:00:00.000Z',
+    end_at: null,
+    is_active: 1,
+  },
+  {
+    id: 'dev-rule-bank-smbc-utility',
     entry_type: 'expense',
-    amount: 1280,
+    amount: 12500,
     entry_category_id: 'dev-cat-expense-utilities',
-    payment_method_id: 'dev-pay-card',
+    payment_method_id: 'dev-pay-bank-smbc',
+    memo: '水道・ガス',
+    frequency: 'monthly',
+    day_of_month: 2,
+    start_at: '2026-04-01T00:00:00.000Z',
+    end_at: null,
+    is_active: 1,
+  },
+  {
+    id: 'dev-rule-bank-sbi-subscription',
+    entry_type: 'expense',
+    amount: 6000,
+    entry_category_id: 'dev-cat-expense-utilities',
+    payment_method_id: 'dev-pay-bank-sbi',
+    memo: '通信費',
+    frequency: 'monthly',
+    day_of_month: 9,
+    start_at: '2026-04-01T00:00:00.000Z',
+    end_at: null,
+    is_active: 1,
+  },
+  {
+    id: 'dev-rule-card-jcb-subscription',
+    entry_type: 'expense',
+    amount: 980,
+    entry_category_id: 'dev-cat-expense-utilities',
+    payment_method_id: 'dev-pay-card-jcb',
     memo: '動画サブスク',
     frequency: 'monthly',
-    day_of_month: 18,
+    day_of_month: 24,
     start_at: '2026-04-01T00:00:00.000Z',
     end_at: null,
     is_active: 1,
@@ -216,12 +392,20 @@ const recordSeedChange = async (
 
 const ensureDevSampleData = async (db: D1Database) => {
   const now = nowIso()
-  let insertedSeed = false
+  await db.prepare("DELETE FROM entries WHERE family_id = ? AND id LIKE 'dev-%'").bind(DEV_FAMILY_ID).run()
+  await db.prepare("DELETE FROM entries WHERE family_id = ? AND id LIKE 'sample-%'").bind(DEV_FAMILY_ID).run()
+  await db.prepare("DELETE FROM recurring_rules WHERE family_id = ? AND id LIKE 'dev-%'").bind(DEV_FAMILY_ID).run()
+  await db.prepare("DELETE FROM recurring_rules WHERE family_id = ? AND id LIKE 'sample-%'").bind(DEV_FAMILY_ID).run()
+  await db.prepare("DELETE FROM payment_methods WHERE family_id = ? AND id LIKE 'dev-%'").bind(DEV_FAMILY_ID).run()
+  await db.prepare("DELETE FROM payment_methods WHERE family_id = ? AND id LIKE 'sample-%'").bind(DEV_FAMILY_ID).run()
+  await db.prepare("DELETE FROM entry_categories WHERE family_id = ? AND id LIKE 'dev-%'").bind(DEV_FAMILY_ID).run()
+  await db.prepare("DELETE FROM entry_categories WHERE family_id = ? AND id LIKE 'sample-%'").bind(DEV_FAMILY_ID).run()
+  await db.prepare('DELETE FROM monthly_balance WHERE family_id = ?').bind(DEV_FAMILY_ID).run()
 
   for (const category of DEV_CATEGORY_SEEDS) {
-    const result = await db
+    await db
       .prepare(
-        'INSERT OR IGNORE INTO entry_categories (id, family_id, name, type, sort_order, created_at, updated_at, icon_key, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO entry_categories (id, family_id, name, type, sort_order, created_at, updated_at, icon_key, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .bind(
         category.id,
@@ -235,37 +419,35 @@ const ensureDevSampleData = async (db: D1Database) => {
         category.color
       )
       .run()
-    if ((result.meta as { changes?: number } | undefined)?.changes) {
-      insertedSeed = true
-      await recordSeedChange(db, 'entry_categories', category.id, 'entry_category')
-    }
+    await recordSeedChange(db, 'entry_categories', category.id, 'entry_category')
   }
 
   for (const method of DEV_PAYMENT_METHOD_SEEDS) {
-    const result = await db
+    await db
       .prepare(
-        'INSERT OR IGNORE INTO payment_methods (id, family_id, name, type, sort_order, created_at, updated_at, icon_key, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO payment_methods (id, family_id, name, type, icon_key, color, card_closing_day, card_payment_day, funding_source_payment_method_id, linked_bank_payment_method_id, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .bind(
         method.id,
         DEV_FAMILY_ID,
         method.name,
         method.type,
+        method.icon_key,
+        method.color,
+        method.card_closing_day ?? null,
+        method.card_payment_day ?? null,
+        method.funding_source_payment_method_id ?? null,
+        method.linked_bank_payment_method_id ?? null,
         method.sort_order,
         now,
         now,
-        method.icon_key,
-        method.color
       )
       .run()
-    if ((result.meta as { changes?: number } | undefined)?.changes) {
-      insertedSeed = true
-      await recordSeedChange(db, 'payment_methods', method.id, 'payment_method')
-    }
+    await recordSeedChange(db, 'payment_methods', method.id, 'payment_method')
   }
 
   for (const entry of DEV_ENTRY_SEEDS) {
-    const result = await db
+    await db
       .prepare(
         'INSERT OR IGNORE INTO entries (id, family_id, entry_type, amount, entry_category_id, payment_method_id, memo, occurred_at, occurred_on, recurring_rule_id, created_at, updated_at, created_by_user_id, created_by_user_name, created_by_avatar_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
@@ -287,14 +469,11 @@ const ensureDevSampleData = async (db: D1Database) => {
         DEV_USER.avatar_url
       )
       .run()
-    if ((result.meta as { changes?: number } | undefined)?.changes) {
-      insertedSeed = true
-      await recordSeedChange(db, 'entries', entry.id, 'entry')
-    }
+    await recordSeedChange(db, 'entries', entry.id, 'entry')
   }
 
   for (const rule of DEV_RECURRING_RULE_SEEDS) {
-    const result = await db
+    await db
       .prepare(
         'INSERT OR IGNORE INTO recurring_rules (id, family_id, entry_type, amount, entry_category_id, payment_method_id, memo, frequency, day_of_month, start_at, end_at, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
@@ -315,15 +494,10 @@ const ensureDevSampleData = async (db: D1Database) => {
         now
       )
       .run()
-    if ((result.meta as { changes?: number } | undefined)?.changes) {
-      insertedSeed = true
-      await recordSeedChange(db, 'recurring_rules', rule.id, 'recurring_rule')
-    }
+    await recordSeedChange(db, 'recurring_rules', rule.id, 'recurring_rule')
   }
 
-  if (insertedSeed) {
-    await recalcMonthlyBalances(db, DEV_FAMILY_ID, '2026-03')
-  }
+  await recalcMonthlyBalances(db, DEV_FAMILY_ID, '2026-03')
 }
 
 const createDevSession = async (c: AppContext) => {

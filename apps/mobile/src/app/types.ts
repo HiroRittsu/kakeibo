@@ -13,7 +13,7 @@ export type PageKey =
   | 'report-category-entities'
   | 'payment-method-entities'
 
-export type PaymentType = 'cash' | 'bank' | 'emoney' | 'card'
+export type PaymentType = 'cash' | 'bank' | 'emoney' | 'card' | 'postpaid'
 export type HolidayAdjustment = 'none' | 'previous' | 'next'
 
 export type SelectOption = {

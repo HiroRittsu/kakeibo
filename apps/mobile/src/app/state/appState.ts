@@ -37,6 +37,7 @@ export type AppState = {
     preferredEntryType: EntryType
     paymentType: PaymentType
     historyMonthYm: string
+    balanceMonthYm: string
     entrySeed: EntryInputSeed | null
     reportCategorySeed: ReportCategoryEntitySeed | null
     paymentMethodSeed: PaymentMethodEntitySeed | null
@@ -52,6 +53,7 @@ export type AppAction =
   | { type: 'TOAST_SHOWN'; payload: NonNullable<ToastState> }
   | { type: 'TOAST_CLEARED' }
   | { type: 'HISTORY_MONTH_CHANGED'; payload: string }
+  | { type: 'BALANCE_MONTH_CHANGED'; payload: string }
   | { type: 'PREFERRED_ENTRY_TYPE_CHANGED'; payload: EntryType }
   | { type: 'ENTRY_SEED_TYPE_CHANGED'; payload: EntryType }
   | { type: 'OFFLINE_AUTH_MODE_DISABLED' }
@@ -106,6 +108,7 @@ export const createInitialAppState = (): AppState => ({
     preferredEntryType: 'expense',
     paymentType: 'cash',
     historyMonthYm: dayjs().format('YYYY-MM'),
+    balanceMonthYm: dayjs().format('YYYY-MM'),
     entrySeed: null,
     reportCategorySeed: null,
     paymentMethodSeed: null,

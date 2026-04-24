@@ -5,6 +5,7 @@ import styles from '../../../shared/styles/App.module.css'
 import { cx } from '../../../shared/utils/cx'
 import { formatAmount } from '../../../shared/utils/format'
 import { getCategoryIcon, renderMaterialIcon } from '../../../shared/icons/materialIcon'
+import { computeCurrentMonthSummary } from '../../monthly-balance/services/currentMonthSummary'
 import type { Entry, EntryCategory, EntryType, MonthlyBalance } from '../../../types'
 import type { EntryInputSeed, SelectOption, TabKey } from '../../../app/types'
 
@@ -29,35 +30,13 @@ export const HomeTab = ({
   onOpenCategorySettings,
   onOpenEntryInput,
 }: HomeTabProps) => {
-  const currentMonthKey = dayjs().format('YYYY-MM')
-  const balanceYm = dayjs(currentMonthKey).subtract(1, 'month').format('YYYY-MM')
-  const carryoverBalance = monthlyBalanceMap.get(balanceYm)?.balance ?? null
-
   const visibleCategories = useMemo(() => {
     return categories.filter((category) => category.type === entryType)
   }, [categories, entryType])
 
   const monthSummary = useMemo(() => {
-    const current = dayjs()
-    const start = current.startOf('month')
-    const end = current.endOf('month')
-
-    let income = 0
-    let expense = 0
-
-    entries.forEach((entry) => {
-      const date = dayjs(entry.occurred_at)
-      if (date.isBefore(start) || date.isAfter(end)) return
-      if (entry.entry_type === 'income') {
-        income += entry.amount
-      } else {
-        expense += entry.amount
-      }
-    })
-
-    const carryover = carryoverBalance ?? 0
-    return { income, expense, balance: carryover + income - expense }
-  }, [entries, carryoverBalance])
+    return computeCurrentMonthSummary(entries, monthlyBalanceMap, dayjs())
+  }, [entries, monthlyBalanceMap])
 
   const totalForRatio = monthSummary.income + monthSummary.expense
   const ratio = totalForRatio > 0 ? monthSummary.expense / totalForRatio : 0

@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import dayjs from 'dayjs'
-import { EntryButtonsList, type EntryListItem } from '../../entries/components/EntryButtonsList'
+import { EntryButtonsList } from '../../entries/components/EntryButtonsList'
+import type { EntryListItem } from '../../entries/types'
 import { useHistoryViewState } from '../hooks/useHistoryViewState'
 import { getCategoryIcon } from '../../../shared/icons/materialIcon'
 import { WEEKDAY_LABELS } from '../../../shared/constants'

@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS payment_methods (
   color TEXT,
   card_closing_day INTEGER,
   card_payment_day INTEGER,
+  funding_source_payment_method_id TEXT,
   linked_bank_payment_method_id TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,

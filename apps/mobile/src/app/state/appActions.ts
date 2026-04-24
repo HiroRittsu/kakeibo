@@ -14,6 +14,7 @@ export const closeMenu = (): AppAction => ({ type: 'MENU_CLOSED' })
 export const showToast = (toast: NonNullable<ToastState>): AppAction => ({ type: 'TOAST_SHOWN', payload: toast })
 export const clearToast = (): AppAction => ({ type: 'TOAST_CLEARED' })
 export const changeHistoryMonth = (ym: string): AppAction => ({ type: 'HISTORY_MONTH_CHANGED', payload: ym })
+export const changeBalanceMonth = (ym: string): AppAction => ({ type: 'BALANCE_MONTH_CHANGED', payload: ym })
 export const changePreferredEntryType = (entryType: EntryType): AppAction => ({
   type: 'PREFERRED_ENTRY_TYPE_CHANGED',
   payload: entryType,

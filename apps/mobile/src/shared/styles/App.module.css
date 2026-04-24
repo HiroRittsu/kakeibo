@@ -1759,6 +1759,36 @@ select {
   gap: 14px;
 }
 
+.balance-household-card {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(33, 102, 111, 0.96) 0%, rgba(47, 109, 180, 0.92) 100%);
+  color: #fff;
+}
+
+.balance-household-label {
+  font-size: 13px;
+  font-weight: 700;
+  opacity: 0.84;
+}
+
+.balance-household-amount {
+  font-size: 34px;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+}
+
+.balance-empty-state {
+  padding: 14px 12px;
+  border: 1px dashed rgba(33, 102, 111, 0.18);
+  border-radius: 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.65);
+}
+
 .balance-total-row {
   display: flex;
   align-items: center;
@@ -1807,6 +1837,198 @@ select {
   display: block;
   padding: 10px 12px;
   border-bottom: 1px dotted var(--line);
+}
+
+.balance-bank-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.balance-bank-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid rgba(33, 102, 111, 0.12);
+}
+
+.balance-bank-button {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.balance-bank-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.balance-amount-block {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  min-width: fit-content;
+}
+
+.balance-amount-block strong {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.balance-amount-block span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.balance-progress-legend {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.balance-stacked-progress {
+  display: flex;
+  align-items: stretch;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.balance-progress-projected {
+  display: block;
+  flex-shrink: 0;
+}
+
+.balance-progress-reserved {
+  display: block;
+  flex-shrink: 0;
+  background: rgba(33, 102, 111, 0.22);
+}
+
+.balance-progress-segment {
+  display: block;
+  flex-shrink: 0;
+}
+
+.balance-breakdown-bar {
+  display: flex;
+  align-items: stretch;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(33, 102, 111, 0.08);
+}
+
+.balance-progress-overflow {
+  display: block;
+  flex-shrink: 0;
+  background: linear-gradient(90deg, rgba(217, 85, 76, 0.72) 0%, rgba(217, 85, 76, 1) 100%);
+}
+
+.balance-meta-list {
+  display: grid;
+  gap: 6px;
+}
+
+.balance-meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.balance-meta-row strong {
+  color: var(--text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+.balance-meta-danger strong {
+  color: var(--expense);
+}
+
+.balance-inline-list,
+.balance-simple-list {
+  display: grid;
+  gap: 8px;
+}
+
+.balance-child-list {
+  display: grid;
+  gap: 8px;
+}
+
+.balance-tree-node {
+  display: grid;
+  gap: 8px;
+  padding-left: calc(var(--balance-tree-depth, 0) * 18px);
+}
+
+.balance-child-card {
+  width: 100%;
+  border: 1px solid rgba(33, 102, 111, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.74);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.balance-child-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.balance-child-title strong {
+  min-width: 0;
+  font-size: 13px;
+}
+
+.balance-child-amount {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.balance-child-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.balance-child-empty {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.54);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.balance-negative-hint {
+  color: var(--expense);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .balance-item-button {
@@ -1863,6 +2085,14 @@ select {
   align-items: center;
   gap: 8px;
   color: var(--text-main);
+}
+
+.balance-amount-income {
+  color: var(--accent-dark);
+}
+
+.balance-amount-expense {
+  color: var(--expense);
 }
 
 .link-button {
@@ -2536,6 +2766,15 @@ select {
   margin-top: 0;
 }
 
+.balance-timeline-list {
+  margin-top: 0;
+}
+
+.balance-timeline-empty {
+  grid-template-columns: 1fr !important;
+  color: var(--text-muted);
+}
+
 .entity-row {
   grid-template-columns: minmax(0, 1fr) auto;
 }
@@ -2666,6 +2905,15 @@ select {
   .payment-method-meta {
     white-space: normal;
     line-height: 1.35;
+  }
+
+  .balance-bank-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .balance-amount-block {
+    justify-items: start;
   }
 }
 

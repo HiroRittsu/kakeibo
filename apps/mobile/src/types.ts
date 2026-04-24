@@ -41,6 +41,7 @@ export type PaymentMethod = {
   color?: string | null
   card_closing_day?: number | null
   card_payment_day?: number | null
+  funding_source_payment_method_id?: string | null
   linked_bank_payment_method_id?: string | null
   sort_order: number
   created_at: string

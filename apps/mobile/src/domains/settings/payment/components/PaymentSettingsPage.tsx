@@ -27,7 +27,7 @@ type PaymentSettingsPageProps = {
     type: string
     cardClosingDay: number | null
     cardPaymentDay: number | null
-    linkedBankPaymentMethodId: string | null
+    fundingSourcePaymentMethodId: string | null
   }) => void
   onSave: (method: PaymentMethod) => void
   onDelete: (method: PaymentMethod) => void
@@ -49,6 +49,23 @@ export const PaymentSettingsPage = ({
     () => sortedMethods.filter((method) => getPaymentType(method.type) === 'bank'),
     [sortedMethods]
   )
+  const cardMethodOptions = useMemo(
+    () => sortedMethods.filter((method) => {
+      const type = getPaymentType(method.type)
+      return type === 'card' || type === 'postpaid'
+    }),
+    [sortedMethods]
+  )
+  const fundingSourceOptions = useMemo(() => {
+    if (state.type === 'card' || state.type === 'postpaid') return bankMethodOptions
+    if (state.type === 'emoney') return [...bankMethodOptions, ...cardMethodOptions]
+    return []
+  }, [bankMethodOptions, cardMethodOptions, state.type])
+  const editFundingSourceOptions = useMemo(() => {
+    if (state.editType === 'card' || state.editType === 'postpaid') return bankMethodOptions
+    if (state.editType === 'emoney') return [...bankMethodOptions, ...cardMethodOptions]
+    return []
+  }, [bankMethodOptions, cardMethodOptions, state.editType])
   const dayOptions = useMemo(() => Array.from({ length: 31 }, (_, index) => index + 1), [])
 
   const handleSubmit = (event: FormEvent) => {
@@ -57,9 +74,12 @@ export const PaymentSettingsPage = ({
     onAdd({
       name: state.name.trim(),
       type: state.type,
-      cardClosingDay: state.type === 'card' ? normalizeDayOfMonth(state.cardClosingDay) : null,
-      cardPaymentDay: state.type === 'card' ? normalizeDayOfMonth(state.cardPaymentDay) : null,
-      linkedBankPaymentMethodId: state.type === 'card' ? state.linkedBankPaymentMethodId || null : null,
+      cardClosingDay: state.type === 'card' || state.type === 'postpaid' ? normalizeDayOfMonth(state.cardClosingDay) : null,
+      cardPaymentDay: state.type === 'card' || state.type === 'postpaid' ? normalizeDayOfMonth(state.cardPaymentDay) : null,
+      fundingSourcePaymentMethodId:
+        state.type === 'card' || state.type === 'postpaid' || state.type === 'emoney'
+          ? state.fundingSourcePaymentMethodId || null
+          : null,
     })
     dispatch({
       type: 'PATCH',
@@ -68,7 +88,7 @@ export const PaymentSettingsPage = ({
         type: defaultType,
         cardClosingDay: '',
         cardPaymentDay: '',
-        linkedBankPaymentMethodId: '',
+        fundingSourcePaymentMethodId: '',
         showForm: false,
       },
     })
@@ -81,9 +101,16 @@ export const PaymentSettingsPage = ({
       ...state.editingMethod,
       name: state.editName.trim(),
       type: state.editType,
-      card_closing_day: state.editType === 'card' ? normalizeDayOfMonth(state.editCardClosingDay) : null,
-      card_payment_day: state.editType === 'card' ? normalizeDayOfMonth(state.editCardPaymentDay) : null,
-      linked_bank_payment_method_id: state.editType === 'card' ? state.editLinkedBankPaymentMethodId || null : null,
+      card_closing_day:
+        state.editType === 'card' || state.editType === 'postpaid' ? normalizeDayOfMonth(state.editCardClosingDay) : null,
+      card_payment_day:
+        state.editType === 'card' || state.editType === 'postpaid' ? normalizeDayOfMonth(state.editCardPaymentDay) : null,
+      funding_source_payment_method_id:
+        state.editType === 'card' || state.editType === 'postpaid' || state.editType === 'emoney'
+          ? state.editFundingSourcePaymentMethodId || null
+          : null,
+      linked_bank_payment_method_id:
+        state.editType === 'card' || state.editType === 'postpaid' ? state.editFundingSourcePaymentMethodId || null : null,
       icon_key: state.editIconKey ?? getPaymentFallbackIconKey(state.editType),
       color: state.editColor,
       updated_at: state.editingMethod.updated_at,
@@ -121,11 +148,21 @@ export const PaymentSettingsPage = ({
     { value: 'bank', label: '銀行口座' },
     { value: 'emoney', label: '電子マネー' },
     { value: 'card', label: 'クレジットカード' },
+    { value: 'postpaid', label: '後払い' },
   ]
   const formatCardMeta = (method: PaymentMethod) => {
-    if (getPaymentType(method.type) !== 'card') return null
-    const linkedBank = bankMethodOptions.find((item) => item.id === method.linked_bank_payment_method_id)?.name ?? '未設定'
-    return `${normalizeDayOfMonth(method.card_closing_day) ?? '未設定'}日締め / ${normalizeDayOfMonth(method.card_payment_day) ?? '未設定'}日払い / 引落: ${linkedBank}`
+    const normalizedType = getPaymentType(method.type)
+    const fundingSourceId = method.funding_source_payment_method_id ?? method.linked_bank_payment_method_id
+    const fundingSourceName = fundingSourceId
+      ? sortedMethods.find((item) => item.id === fundingSourceId)?.name ?? '未設定'
+      : '未設定'
+    if (normalizedType === 'card' || normalizedType === 'postpaid') {
+      return `${normalizeDayOfMonth(method.card_closing_day) ?? '未設定'}日締め / ${normalizeDayOfMonth(method.card_payment_day) ?? '未設定'}日払い / 親: ${fundingSourceName}`
+    }
+    if (normalizedType === 'emoney') {
+      return `親: ${fundingSourceName}`
+    }
+    return null
   }
 
   return (
@@ -202,11 +239,15 @@ export const PaymentSettingsPage = ({
                   type: 'PATCH',
                   payload: {
                     type: nextType,
-                    ...(nextType !== 'card'
+                    ...(nextType !== 'card' && nextType !== 'postpaid'
                       ? {
                           cardClosingDay: '',
                           cardPaymentDay: '',
-                          linkedBankPaymentMethodId: '',
+                        }
+                      : {}),
+                    ...(nextType !== 'card' && nextType !== 'emoney'
+                      ? {
+                          fundingSourcePaymentMethodId: '',
                         }
                       : {}),
                   },
@@ -219,48 +260,52 @@ export const PaymentSettingsPage = ({
                 </option>
               ))}
             </select>
-            {state.type === 'card' && (
+            {(state.type === 'card' || state.type === 'postpaid' || state.type === 'emoney') && (
               <div className={scx('card-setting-grid')}>
-                <label className={scx('sheet-field-label')} htmlFor="payment-closing-day-add">
-                  締め日
+                {(state.type === 'card' || state.type === 'postpaid') && (
+                  <>
+                    <label className={scx('sheet-field-label')} htmlFor="payment-closing-day-add">
+                      締め日
+                    </label>
+                    <select
+                      id="payment-closing-day-add"
+                      value={state.cardClosingDay}
+                      onChange={(event) => dispatch({ type: 'PATCH', payload: { cardClosingDay: event.target.value } })}
+                    >
+                      <option value="">未設定</option>
+                      {dayOptions.map((day) => (
+                        <option key={day} value={String(day)}>
+                          {day}日
+                        </option>
+                      ))}
+                    </select>
+                    <label className={scx('sheet-field-label')} htmlFor="payment-day-add">
+                      支払い日
+                    </label>
+                    <select
+                      id="payment-day-add"
+                      value={state.cardPaymentDay}
+                      onChange={(event) => dispatch({ type: 'PATCH', payload: { cardPaymentDay: event.target.value } })}
+                    >
+                      <option value="">未設定</option>
+                      {dayOptions.map((day) => (
+                        <option key={day} value={String(day)}>
+                          {day}日
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                )}
+                <label className={scx('sheet-field-label')} htmlFor="payment-funding-source-add">
+                  {state.type === 'card' || state.type === 'postpaid' ? '親口座' : '親支払い元'}
                 </label>
                 <select
-                  id="payment-closing-day-add"
-                  value={state.cardClosingDay}
-                  onChange={(event) => dispatch({ type: 'PATCH', payload: { cardClosingDay: event.target.value } })}
+                  id="payment-funding-source-add"
+                  value={state.fundingSourcePaymentMethodId}
+                  onChange={(event) => dispatch({ type: 'PATCH', payload: { fundingSourcePaymentMethodId: event.target.value } })}
                 >
                   <option value="">未設定</option>
-                  {dayOptions.map((day) => (
-                    <option key={day} value={String(day)}>
-                      {day}日
-                    </option>
-                  ))}
-                </select>
-                <label className={scx('sheet-field-label')} htmlFor="payment-day-add">
-                  支払い日
-                </label>
-                <select
-                  id="payment-day-add"
-                  value={state.cardPaymentDay}
-                  onChange={(event) => dispatch({ type: 'PATCH', payload: { cardPaymentDay: event.target.value } })}
-                >
-                  <option value="">未設定</option>
-                  {dayOptions.map((day) => (
-                    <option key={day} value={String(day)}>
-                      {day}日
-                    </option>
-                  ))}
-                </select>
-                <label className={scx('sheet-field-label')} htmlFor="payment-linked-bank-add">
-                  引落口座
-                </label>
-                <select
-                  id="payment-linked-bank-add"
-                  value={state.linkedBankPaymentMethodId}
-                  onChange={(event) => dispatch({ type: 'PATCH', payload: { linkedBankPaymentMethodId: event.target.value } })}
-                >
-                  <option value="">未設定</option>
-                  {bankMethodOptions.map((method) => (
+                  {fundingSourceOptions.map((method) => (
                     <option key={method.id} value={method.id}>
                       {method.name}
                     </option>
@@ -302,11 +347,15 @@ export const PaymentSettingsPage = ({
                   type: 'PATCH',
                   payload: {
                     editType: nextType,
-                    ...(nextType !== 'card'
+                    ...(nextType !== 'card' && nextType !== 'postpaid'
                       ? {
                           editCardClosingDay: '',
                           editCardPaymentDay: '',
-                          editLinkedBankPaymentMethodId: '',
+                        }
+                      : {}),
+                    ...(nextType !== 'card' && nextType !== 'emoney'
+                      ? {
+                          editFundingSourcePaymentMethodId: '',
                         }
                       : {}),
                   },
@@ -319,48 +368,52 @@ export const PaymentSettingsPage = ({
                 </option>
               ))}
             </select>
-            {state.editType === 'card' && (
+            {(state.editType === 'card' || state.editType === 'postpaid' || state.editType === 'emoney') && (
               <div className={scx('card-setting-grid')}>
-                <label className={scx('sheet-field-label')} htmlFor="payment-closing-day-edit">
-                  締め日
+                {(state.editType === 'card' || state.editType === 'postpaid') && (
+                  <>
+                    <label className={scx('sheet-field-label')} htmlFor="payment-closing-day-edit">
+                      締め日
+                    </label>
+                    <select
+                      id="payment-closing-day-edit"
+                      value={state.editCardClosingDay}
+                      onChange={(event) => dispatch({ type: 'PATCH', payload: { editCardClosingDay: event.target.value } })}
+                    >
+                      <option value="">未設定</option>
+                      {dayOptions.map((day) => (
+                        <option key={day} value={String(day)}>
+                          {day}日
+                        </option>
+                      ))}
+                    </select>
+                    <label className={scx('sheet-field-label')} htmlFor="payment-day-edit">
+                      支払い日
+                    </label>
+                    <select
+                      id="payment-day-edit"
+                      value={state.editCardPaymentDay}
+                      onChange={(event) => dispatch({ type: 'PATCH', payload: { editCardPaymentDay: event.target.value } })}
+                    >
+                      <option value="">未設定</option>
+                      {dayOptions.map((day) => (
+                        <option key={day} value={String(day)}>
+                          {day}日
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                )}
+                <label className={scx('sheet-field-label')} htmlFor="payment-funding-source-edit">
+                  {state.editType === 'card' || state.editType === 'postpaid' ? '親口座' : '親支払い元'}
                 </label>
                 <select
-                  id="payment-closing-day-edit"
-                  value={state.editCardClosingDay}
-                  onChange={(event) => dispatch({ type: 'PATCH', payload: { editCardClosingDay: event.target.value } })}
+                  id="payment-funding-source-edit"
+                  value={state.editFundingSourcePaymentMethodId}
+                  onChange={(event) => dispatch({ type: 'PATCH', payload: { editFundingSourcePaymentMethodId: event.target.value } })}
                 >
                   <option value="">未設定</option>
-                  {dayOptions.map((day) => (
-                    <option key={day} value={String(day)}>
-                      {day}日
-                    </option>
-                  ))}
-                </select>
-                <label className={scx('sheet-field-label')} htmlFor="payment-day-edit">
-                  支払い日
-                </label>
-                <select
-                  id="payment-day-edit"
-                  value={state.editCardPaymentDay}
-                  onChange={(event) => dispatch({ type: 'PATCH', payload: { editCardPaymentDay: event.target.value } })}
-                >
-                  <option value="">未設定</option>
-                  {dayOptions.map((day) => (
-                    <option key={day} value={String(day)}>
-                      {day}日
-                    </option>
-                  ))}
-                </select>
-                <label className={scx('sheet-field-label')} htmlFor="payment-linked-bank-edit">
-                  引落口座
-                </label>
-                <select
-                  id="payment-linked-bank-edit"
-                  value={state.editLinkedBankPaymentMethodId}
-                  onChange={(event) => dispatch({ type: 'PATCH', payload: { editLinkedBankPaymentMethodId: event.target.value } })}
-                >
-                  <option value="">未設定</option>
-                  {bankMethodOptions.map((method) => (
+                  {editFundingSourceOptions.map((method) => (
                     <option key={method.id} value={method.id}>
                       {method.name}
                     </option>

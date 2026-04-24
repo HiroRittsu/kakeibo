@@ -3,11 +3,7 @@ import styles from './EntryButtonsList.module.css'
 import { cx } from '../../../shared/utils/cx'
 import type { PaymentType } from '../../../app/types'
 import type { Entry, EntryCategory, PaymentMethod } from '../../../types'
-
-export type EntryListItem = Entry & {
-  is_planned?: boolean
-  is_carryover?: boolean
-}
+import type { EntryListItem } from '../types'
 
 type EntryButtonsListProps = {
   entries: EntryListItem[]
@@ -25,6 +21,8 @@ type EntryButtonsListProps = {
 }
 
 const defaultMetaBuilder = (entry: EntryListItem) => {
+  const detailLabel = entry.detail_label?.trim()
+  if (detailLabel) return detailLabel
   const memo = entry.memo?.trim()
   return memo && memo.length > 0 ? memo : null
 }
@@ -36,12 +34,19 @@ const paymentOverlayClassByType: Record<OverlayPaymentType, string> = {
   bank: styles.bank,
   emoney: styles.emoney,
   card: styles.creditCard,
+  postpaid: styles.creditCard,
   unknown: styles.unknown,
 }
 
 const resolveOverlayPaymentType = (method: PaymentMethod | null): OverlayPaymentType => {
   if (!method) return 'unknown'
-  if (method.type === 'cash' || method.type === 'bank' || method.type === 'emoney' || method.type === 'card') {
+  if (
+    method.type === 'cash' ||
+    method.type === 'bank' ||
+    method.type === 'emoney' ||
+    method.type === 'card' ||
+    method.type === 'postpaid'
+  ) {
     return method.type
   }
   return 'unknown'
@@ -76,10 +81,20 @@ export const EntryButtonsList = ({
           const method = !isCarryover && entry.payment_method_id ? (paymentMap.get(entry.payment_method_id) ?? null) : null
           const paymentClass = paymentOverlayClassByType[resolveOverlayPaymentType(method)]
           const paymentOverlayStyle = method ? { background: getPaymentColor(method), color: '#fff' } : undefined
-          const categoryColor = isCarryover ? '#8f9499' : category?.color ?? '#d9554c'
-          const categoryIcon = isCarryover ? null : getCategoryIcon(category?.icon_key)
-          const categoryFallback = category?.name?.slice(0, 1) ?? '?'
-          const categoryLabel = isCarryover ? '繰越し' : category?.name ?? '未分類'
+          const usePaymentIconAsPrimary = Boolean(entry.use_payment_icon_as_primary && method)
+          const categoryColor = isCarryover
+            ? '#8f9499'
+            : usePaymentIconAsPrimary
+              ? getPaymentColor(method)
+              : category?.color ?? '#d9554c'
+          const categoryIcon = isCarryover
+            ? null
+            : usePaymentIconAsPrimary
+              ? getPaymentIcon(method)
+              : getCategoryIcon(category?.icon_key)
+          const categoryFallback = usePaymentIconAsPrimary ? '?' : category?.name?.slice(0, 1) ?? '?'
+          const displayName = entry.display_name?.trim()
+          const categoryLabel = isCarryover ? '繰越し' : displayName || category?.name || '未分類'
           const creatorAvatarUrl = entry.created_by_avatar_url?.trim() ?? ''
           const creatorName = entry.created_by_user_name?.trim() ?? ''
           const amountPrefix = isPlanned ? (entry.entry_type === 'income' ? '+' : '-') : ''
@@ -114,7 +129,7 @@ export const EntryButtonsList = ({
                       )}
                     </span>
                   )}
-                  {!isCarryover && (
+                  {!isCarryover && !usePaymentIconAsPrimary && (
                     <span className={cx(styles.entryPaymentOverlay, paymentClass)} style={paymentOverlayStyle}>
                       {getPaymentIcon(method)}
                     </span>

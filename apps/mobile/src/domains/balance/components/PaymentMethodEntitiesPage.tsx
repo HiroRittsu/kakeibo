@@ -2,64 +2,67 @@ import { useMemo } from 'react'
 import dayjs from 'dayjs'
 import { HistoryStyleGroupedEntries } from '../../history/components/HistoryStyleGroupedEntries'
 import styles from '../../../shared/styles/App.module.css'
-import { formatAmount, formatDayLabel, normalizeDayOfMonth } from '../../../shared/utils/format'
-import { getPaymentType } from '../../../shared/utils/payment'
+import { buildMethodDetailEntriesForMonth, findBankSummary } from '../services/balanceTimeline'
 import type { PaymentMethodEntitySeed } from '../../../app/types'
-import type { Entry, EntryCategory, PaymentMethod } from '../../../types'
+import type { Entry, EntryCategory, PaymentMethod, RecurringRule } from '../../../types'
+import type { EntryListItem } from '../../entries/types'
+import { isBankAccountMethod } from '../services/paymentMethodModel'
 
 type PaymentMethodEntitiesPageProps = {
+  currentMonthYm: string
   seed: PaymentMethodEntitySeed
   entries: Entry[]
   categoryMap: Map<string, EntryCategory>
   paymentMethods: PaymentMethod[]
+  recurringRules: RecurringRule[]
 }
 
 export const PaymentMethodEntitiesPage = ({
+  currentMonthYm,
   seed,
   entries,
   categoryMap,
   paymentMethods,
+  recurringRules,
 }: PaymentMethodEntitiesPageProps) => {
-  const filteredEntries = useMemo(() => {
-    return entries
-      .filter((entry) => entry.payment_method_id === seed.methodId)
-      .sort((a, b) => dayjs(b.occurred_at).valueOf() - dayjs(a.occurred_at).valueOf())
-  }, [entries, seed])
+  const currentMonth = useMemo(() => dayjs(`${currentMonthYm}-01`), [currentMonthYm])
   const paymentMap = useMemo(() => new Map(paymentMethods.map((item) => [item.id, item])), [paymentMethods])
-  const method = paymentMethods.find((item) => item.id === seed.methodId) ?? null
+  const method = paymentMap.get(seed.methodId) ?? null
+  const bankSummary = useMemo(
+    () => findBankSummary(entries, paymentMethods, recurringRules, seed.methodId, currentMonth),
+    [currentMonth, entries, paymentMethods, recurringRules, seed.methodId]
+  )
 
-  const totals = useMemo(() => {
-    return filteredEntries.reduce(
-      (sum, entry) => {
-        if (entry.entry_type === 'income') {
-          sum.income += entry.amount
-        } else {
-          sum.expense += entry.amount
-        }
-        return sum
-      },
-      { income: 0, expense: 0 }
+  const childEntries = useMemo(() => {
+    if (!method || isBankAccountMethod(method)) return [] as EntryListItem[]
+    return buildMethodDetailEntriesForMonth(method.id, entries, paymentMethods, recurringRules, currentMonth)
+  }, [currentMonth, entries, method, paymentMethods, recurringRules])
+
+  if (method && isBankAccountMethod(method) && bankSummary) {
+    return (
+      <section className={styles.card}>
+        <HistoryStyleGroupedEntries
+          entries={bankSummary.detailEntries}
+          categoryMap={categoryMap}
+          paymentMap={paymentMap}
+          emptyMessage="この銀行口座に紐づく明細はありません"
+        />
+      </section>
     )
-  }, [filteredEntries])
-  const displayTotal = method && getPaymentType(method.type) === 'card' ? totals.expense : totals.income - totals.expense
-  const linkedBankName =
-    method?.linked_bank_payment_method_id ? paymentMap.get(method.linked_bank_payment_method_id)?.name ?? null : null
-  const cardScheduleLabel =
-    method && getPaymentType(method.type) === 'card'
-      ? `${formatDayLabel(normalizeDayOfMonth(method.card_closing_day))}締め / ${formatDayLabel(
-          normalizeDayOfMonth(method.card_payment_day)
-        )}払い${linkedBankName ? ` / 引落: ${linkedBankName}` : ''}`
-      : null
+  }
+
+  if (!method) {
+    return (
+      <section className={styles.card}>
+        <div className={styles.balanceEmptyState}>この支払い方法の明細を表示できません。</div>
+      </section>
+    )
+  }
 
   return (
     <section className={styles.card}>
-      <div className={styles.entityTotalHeader}>
-        <span>合計</span>
-        <strong>¥{formatAmount(displayTotal)}</strong>
-      </div>
-      {cardScheduleLabel && <div className={styles.entityTotalMeta}>{cardScheduleLabel}</div>}
       <HistoryStyleGroupedEntries
-        entries={filteredEntries}
+        entries={childEntries}
         categoryMap={categoryMap}
         paymentMap={paymentMap}
         emptyMessage="この支払い方法に紐づく明細はありません"

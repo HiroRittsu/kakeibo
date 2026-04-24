@@ -1,219 +1,193 @@
 import { useMemo } from 'react'
 import dayjs from 'dayjs'
-import { PAYMENT_DEFAULT_COLORS } from '../../../shared/constants'
 import styles from '../../../shared/styles/App.module.css'
 import { cx } from '../../../shared/utils/cx'
-import { formatAmount, formatDayLabel, normalizeDayOfMonth } from '../../../shared/utils/format'
-import { getPaymentIconFromConfig, getPaymentType } from '../../../shared/utils/payment'
+import { formatAmount } from '../../../shared/utils/format'
+import { getPaymentColorByType, getPaymentIconFromConfig } from '../../../shared/utils/payment'
+import { buildBalanceOverview, type MethodTreeSummary } from '../services/balanceTimeline'
 import type { PaymentMethodEntitySeed, PaymentType } from '../../../app/types'
-import type { Entry, MonthlyBalance, PaymentMethod } from '../../../types'
+import type { Entry, PaymentMethod, RecurringRule } from '../../../types'
 
 type BalancePageProps = {
   entries: Entry[]
-  monthlyBalanceMap: Map<string, MonthlyBalance>
+  currentMonthYm: string
   paymentMethods: PaymentMethod[]
+  recurringRules: RecurringRule[]
+  onChangeMonthYm: (ym: string) => void
   onOpenPayment: (type: PaymentType) => void
   onOpenPaymentMethodEntities: (seed: PaymentMethodEntitySeed) => void
 }
 
-type BalanceItem = {
-  id: string
-  name: string
-  type: string
-  icon_key?: string | null
-  color?: string | null
-  amount: number
-  caption: string
-  schedule?: string | null
-}
-
-const BalanceSection = ({
-  title,
-  items,
-  onEmpty,
-  onOpenItem,
+const MethodTreeCards = ({
+  nodes,
+  depth = 0,
+  onOpen,
 }: {
-  title: string
-  items: BalanceItem[]
-  onEmpty: () => void
-  onOpenItem: (item: BalanceItem) => void
-}) => {
-  const sectionTotal = items.reduce((sum, item) => sum + item.amount, 0)
-
-  return (
-    <div className={styles.balanceSection}>
-      <div className={styles.balanceHeader}>
-        <span>{title}</span>
-        {items.length === 0 ? (
-          <button className={styles.linkButton} onClick={onEmpty}>
-            設定する
-          </button>
-        ) : (
-          <strong className={styles.balanceHeaderTotal}>合計 ¥{formatAmount(sectionTotal)}</strong>
+  nodes: MethodTreeSummary[]
+  depth?: number
+  onOpen: (seed: PaymentMethodEntitySeed) => void
+}) => (
+  <div className={styles.balanceChildList}>
+    {nodes.map((node) => (
+      <div
+        key={node.methodId}
+        className={styles.balanceTreeNode}
+        style={{ '--balance-tree-depth': String(depth) } as Record<string, string>}
+      >
+        <button
+          type="button"
+          className={styles.balanceChildCard}
+          onClick={() => onOpen({ methodId: node.methodId, methodName: node.methodName })}
+        >
+          <div className={styles.balanceChildTitle}>
+              <span
+                className={styles.balanceChildIcon}
+                style={{
+                  background: getPaymentColorByType(node.type, node.color),
+                  color: '#fff',
+                }}
+              >
+              {getPaymentIconFromConfig(node.type, node.iconKey ?? null)}
+            </span>
+            <div>
+              <strong>{node.methodName}</strong>
+            </div>
+          </div>
+          <strong className={styles.balanceChildAmount}>¥{formatAmount(node.amount)}</strong>
+        </button>
+        {node.children.length > 0 && (
+          <MethodTreeCards nodes={node.children} depth={depth + 1} onOpen={onOpen} />
         )}
       </div>
-      {items.length > 0 && (
-        <ul className={styles.balanceList}>
-          {items.map((item) => (
-            <li key={item.id}>
-              <button type="button" className={styles.balanceItemButton} onClick={() => onOpenItem(item)}>
-                <div className={styles.balanceInfo}>
-                  <span
-                    className={styles.paymentMethodIcon}
-                    style={{
-                      background: item.color ?? PAYMENT_DEFAULT_COLORS[getPaymentType(item.type)],
-                      color: '#fff',
-                    }}
-                  >
-                    {getPaymentIconFromConfig(item.type, item.icon_key ?? null)}
-                  </span>
-                  <div>
-                    <strong>{item.name}</strong>
-                    <span>{item.caption}</span>
-                    {item.schedule && <span className={styles.balanceCardMeta}>{item.schedule}</span>}
-                  </div>
-                </div>
-                <div className={styles.balanceAmount}>
-                  <strong>¥{formatAmount(item.amount)}</strong>
-                  <span>›</span>
-                </div>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
+    ))}
+  </div>
+)
 
 export const BalancePage = ({
   entries,
-  monthlyBalanceMap,
+  currentMonthYm,
   paymentMethods,
+  recurringRules,
+  onChangeMonthYm,
   onOpenPayment,
   onOpenPaymentMethodEntities,
 }: BalancePageProps) => {
-  const currentMonthKey = dayjs().format('YYYY-MM')
-  const balanceYm = dayjs(currentMonthKey).subtract(1, 'month').format('YYYY-MM')
-  const carryoverBalance = monthlyBalanceMap.get(balanceYm)?.balance ?? null
-
-  const monthNet = useMemo(() => {
-    const current = dayjs()
-    const start = current.startOf('month')
-    const end = current.endOf('month')
-    let net = 0
-    entries.forEach((entry) => {
-      const date = dayjs(entry.occurred_at)
-      if (date.isBefore(start) || date.isAfter(end)) return
-      net += entry.entry_type === 'income' ? entry.amount : -entry.amount
-    })
-    return net
-  }, [entries])
-
-  const totalsByMethod = useMemo(() => {
-    const map = new Map<string, { income: number; expense: number }>()
-    entries.forEach((entry) => {
-      if (!entry.payment_method_id) return
-      const current = map.get(entry.payment_method_id) ?? { income: 0, expense: 0 }
-      if (entry.entry_type === 'income') {
-        current.income += entry.amount
-      } else {
-        current.expense += entry.amount
-      }
-      map.set(entry.payment_method_id, current)
-    })
-    return map
-  }, [entries])
-
-  const totalBalance = useMemo(() => {
-    if (carryoverBalance !== null) {
-      return carryoverBalance + monthNet
-    }
-    return entries.reduce((sum, entry) => {
-      return sum + (entry.entry_type === 'income' ? entry.amount : -entry.amount)
-    }, 0)
-  }, [entries, carryoverBalance, monthNet])
-
-  const paymentNameMap = useMemo(() => {
-    return new Map(paymentMethods.map((method) => [method.id, method.name]))
-  }, [paymentMethods])
-
-  const groupedMethods = useMemo(() => {
-    const groups: Record<PaymentType, PaymentMethod[]> = {
-      cash: [],
-      bank: [],
-      emoney: [],
-      card: [],
-    }
-    paymentMethods.forEach((method) => {
-      const type = getPaymentType(method.type)
-      groups[type].push(method)
-    })
-    return groups
-  }, [paymentMethods])
-
-  const buildItems = (methods: PaymentMethod[], mode: 'balance' | 'card'): BalanceItem[] => {
-    return methods.map((method) => {
-      const totals = totalsByMethod.get(method.id) ?? { income: 0, expense: 0 }
-      const amount = mode === 'card' ? totals.expense : totals.income - totals.expense
-      const schedule =
-        mode === 'card'
-          ? `${formatDayLabel(normalizeDayOfMonth(method.card_closing_day))}締め / ${formatDayLabel(
-              normalizeDayOfMonth(method.card_payment_day)
-            )}払い`
-          : null
-      const linkedBankName = method.linked_bank_payment_method_id
-        ? paymentNameMap.get(method.linked_bank_payment_method_id) ?? null
-        : null
-      return {
-        id: method.id,
-        name: method.name,
-        type: method.type,
-        icon_key: method.icon_key ?? null,
-        color: method.color ?? null,
-        amount,
-        caption: mode === 'card' ? '総支払予定' : '残高',
-        schedule: schedule && linkedBankName ? `${schedule} / 引落: ${linkedBankName}` : schedule,
-      }
-    })
+  const currentMonth = useMemo(() => dayjs(`${currentMonthYm}-01`), [currentMonthYm])
+  const overview = useMemo(
+    () => buildBalanceOverview(entries, paymentMethods, recurringRules, currentMonth),
+    [currentMonth, entries, paymentMethods, recurringRules]
+  )
+  const handleChangeMonth = (delta: number) => {
+    onChangeMonthYm(currentMonth.add(delta, 'month').format('YYYY-MM'))
   }
-
-  const cashItems = buildItems(groupedMethods.cash, 'balance')
-  const bankItems = buildItems(groupedMethods.bank, 'balance')
-  const emoneyItems = buildItems(groupedMethods.emoney, 'balance')
-  const cardItems = buildItems(groupedMethods.card, 'card')
-
   return (
     <section className={cx(styles.card, styles.balanceCard)}>
-      <div className={styles.balanceTotalRow}>
-        <span>合計</span>
-        <strong>¥{formatAmount(totalBalance)}</strong>
+      <div className={styles.monthHeader}>
+        <button type="button" className={styles.iconButton} onClick={() => handleChangeMonth(-1)}>
+          ‹
+        </button>
+        <h2>{currentMonth.format('YYYY年 M月')}</h2>
+        <button type="button" className={styles.iconButton} onClick={() => handleChangeMonth(1)}>
+          ›
+        </button>
       </div>
 
-      <BalanceSection
-        title="現金"
-        items={cashItems}
-        onEmpty={() => onOpenPayment('cash')}
-        onOpenItem={(item) => onOpenPaymentMethodEntities({ methodId: item.id, methodName: item.name })}
-      />
-      <BalanceSection
-        title="銀行口座"
-        items={bankItems}
-        onEmpty={() => onOpenPayment('bank')}
-        onOpenItem={(item) => onOpenPaymentMethodEntities({ methodId: item.id, methodName: item.name })}
-      />
-      <BalanceSection
-        title="電子マネー"
-        items={emoneyItems}
-        onEmpty={() => onOpenPayment('emoney')}
-        onOpenItem={(item) => onOpenPaymentMethodEntities({ methodId: item.id, methodName: item.name })}
-      />
-      <BalanceSection
-        title="クレジット"
-        items={cardItems}
-        onEmpty={() => onOpenPayment('card')}
-        onOpenItem={(item) => onOpenPaymentMethodEntities({ methodId: item.id, methodName: item.name })}
-      />
+      <div className={styles.balanceSection}>
+        <div className={styles.balanceHeader}>
+          <span>銀行口座</span>
+          <button className={styles.linkButton} onClick={() => onOpenPayment('bank')}>
+            設定する
+          </button>
+        </div>
+        {overview.bankSummaries.length === 0 ? (
+          <div className={styles.balanceEmptyState}>銀行口座を追加すると、紐づく引落額をまとめて表示できます。</div>
+        ) : (
+          <ul className={styles.balanceBankList}>
+            {overview.bankSummaries.map((summary) => {
+              const segmentTotal = Math.max(1, summary.deductionSegments.reduce((sum, segment) => sum + segment.amount, 0))
+              return (
+                <li key={summary.bankMethodId} className={styles.balanceBankCard}>
+                  <button
+                    type="button"
+                    className={styles.balanceBankButton}
+                    onClick={() =>
+                      onOpenPaymentMethodEntities({ methodId: summary.bankMethodId, methodName: summary.bankName })
+                    }
+                  >
+                    <div className={styles.balanceBankHeader}>
+                      <div className={styles.balanceInfo}>
+                        <span
+                          className={styles.paymentMethodIcon}
+                          style={{
+                            background: summary.color ?? '#2f6db4',
+                            color: '#fff',
+                          }}
+                        >
+                          {getPaymentIconFromConfig('bank', summary.iconKey ?? null)}
+                        </span>
+                        <div>
+                          <strong>{summary.bankName}</strong>
+                        </div>
+                      </div>
+                      <div className={styles.balanceAmountBlock}>
+                        <span>銀行残高</span>
+                        <strong>¥{formatAmount(summary.detailTotal)}</strong>
+                      </div>
+                    </div>
+                  </button>
+
+                  <div className={styles.entityPageHeader}>
+                    <span>紐づき合計</span>
+                    <strong>¥{formatAmount(summary.linkedTotal)}</strong>
+                  </div>
+
+                  {summary.deductionSegments.length > 0 && (
+                    <div className={styles.balanceBreakdownBar}>
+                      {summary.deductionSegments.map((segment) => (
+                        <span
+                          key={segment.methodId}
+                          className={styles.balanceProgressSegment}
+                          style={{
+                            width: `${(segment.amount / segmentTotal) * 100}%`,
+                            background: segment.color ?? '#3a4bb8',
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  <div className={styles.balanceChildList}>
+                    {summary.linkedMethods.length === 0 ? (
+                      <div className={styles.balanceChildEmpty}>紐づく支払い方法はありません。</div>
+                    ) : (
+                      <MethodTreeCards nodes={summary.linkedMethods} onOpen={onOpenPaymentMethodEntities} />
+                    )}
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
+
+      <div className={styles.balanceSection}>
+        <div className={styles.balanceHeader}>
+          <span>未連携の支払い方法</span>
+          <button className={styles.linkButton} onClick={() => onOpenPayment('card')}>
+            設定する
+          </button>
+        </div>
+        {overview.otherMethodRoots.length === 0 ? (
+          <div className={styles.balanceEmptyState}>未連携の支払い方法はありません。</div>
+        ) : (
+          <div className={styles.balanceChildList}>
+            <MethodTreeCards
+              nodes={overview.otherMethodRoots}
+              onOpen={onOpenPaymentMethodEntities}
+            />
+          </div>
+        )}
+      </div>
     </section>
   )
 }

@@ -8,8 +8,8 @@ import { formatAmount } from '../../../shared/utils/format'
 import { getCategoryIcon } from '../../../shared/icons/materialIcon'
 import { getPaymentColor, getPaymentIcon } from '../../../shared/utils/payment'
 import { getEntryDateKey } from '../../../shared/utils/date'
-import type { Entry, EntryCategory, PaymentMethod } from '../../../types'
-import type { EntryListItem } from '../../entries/components/EntryButtonsList'
+import type { EntryCategory, PaymentMethod } from '../../../types'
+import type { EntryListItem } from '../../entries/types'
 
 type HistoryStyleGroup = {
   dateKey: string
@@ -18,7 +18,7 @@ type HistoryStyleGroup = {
   totals: { income: number; expense: number }
 }
 
-const buildHistoryStyleGroups = (entries: Entry[]): HistoryStyleGroup[] => {
+const buildHistoryStyleGroups = (entries: EntryListItem[]): HistoryStyleGroup[] => {
   const grouped = new Map<string, HistoryStyleGroup>()
   entries.forEach((entry) => {
     const dateKey = getEntryDateKey(entry)
@@ -46,10 +46,11 @@ const buildHistoryStyleGroups = (entries: Entry[]): HistoryStyleGroup[] => {
 }
 
 type HistoryStyleGroupedEntriesProps = {
-  entries: Entry[]
+  entries: EntryListItem[]
   categoryMap: Map<string, EntryCategory>
   paymentMap: Map<string, PaymentMethod>
   emptyMessage: string
+  metaBuilder?: (entry: EntryListItem) => string | null
 }
 
 export const HistoryStyleGroupedEntries = ({
@@ -57,6 +58,7 @@ export const HistoryStyleGroupedEntries = ({
   categoryMap,
   paymentMap,
   emptyMessage,
+  metaBuilder,
 }: HistoryStyleGroupedEntriesProps) => {
   const groups = useMemo(() => buildHistoryStyleGroups(entries), [entries])
 
@@ -82,6 +84,7 @@ export const HistoryStyleGroupedEntries = ({
             getPaymentColor={getPaymentColor}
             readOnly
             showCreatorBadge
+            metaBuilder={metaBuilder}
           />
         </li>
       ))}

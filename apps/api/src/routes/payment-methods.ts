@@ -77,6 +77,16 @@ const parseCardDay = (value: unknown): number | null | 'invalid' => {
   return normalized
 }
 
+const normalizeFundingSourceId = (payload: Record<string, unknown>) => {
+  if (typeof payload.funding_source_payment_method_id === 'string' && payload.funding_source_payment_method_id.trim()) {
+    return payload.funding_source_payment_method_id.trim()
+  }
+  if (typeof payload.linked_bank_payment_method_id === 'string' && payload.linked_bank_payment_method_id.trim()) {
+    return payload.linked_bank_payment_method_id.trim()
+  }
+  return null
+}
+
 export const registerPaymentMethodRoutes = (app: Hono<HonoEnv>) => {
   app.get('/payment-methods', async (c) => {
     const familyId = requireFamilyId(c)
@@ -136,23 +146,33 @@ export const registerPaymentMethodRoutes = (app: Hono<HonoEnv>) => {
     if (parsedCardPaymentDay === 'invalid') {
       return c.json(jsonError('card_payment_day must be between 1 and 31'), 400)
     }
-    const linkedBankPaymentMethodIdRaw =
-      typeof payload.linked_bank_payment_method_id === 'string' && payload.linked_bank_payment_method_id.trim()
-        ? payload.linked_bank_payment_method_id.trim()
-        : null
+    const fundingSourcePaymentMethodIdRaw = normalizeFundingSourceId(payload)
     if (!name || !type) return c.json(jsonError('name and type are required'), 400)
 
-    const cardClosingDay = type === 'card' ? parsedCardClosingDay : null
-    const cardPaymentDay = type === 'card' ? parsedCardPaymentDay : null
-    const linkedBankPaymentMethodId = type === 'card' ? linkedBankPaymentMethodIdRaw : null
+    const cardClosingDay = type === 'card' || type === 'postpaid' ? parsedCardClosingDay : null
+    const cardPaymentDay = type === 'card' || type === 'postpaid' ? parsedCardPaymentDay : null
+    const fundingSourcePaymentMethodId =
+      type === 'card' || type === 'postpaid' || type === 'emoney' ? fundingSourcePaymentMethodIdRaw : null
+    const linkedBankPaymentMethodId = type === 'card' || type === 'postpaid' ? fundingSourcePaymentMethodIdRaw : null
 
-    if (type === 'card' && linkedBankPaymentMethodId) {
-      const linkedBank = await c.env.DB
-        .prepare('SELECT id FROM payment_methods WHERE id = ? AND family_id = ? AND type = ?')
-        .bind(linkedBankPaymentMethodId, familyId, 'bank')
-        .first<{ id: string }>()
-      if (!linkedBank?.id) {
-        return c.json(jsonError('linked_bank_payment_method_id must be a bank account'), 400)
+    if (fundingSourcePaymentMethodId && (type === 'card' || type === 'postpaid' || type === 'emoney')) {
+      const fundingSource = await c.env.DB
+        .prepare('SELECT id, type FROM payment_methods WHERE id = ? AND family_id = ?')
+        .bind(fundingSourcePaymentMethodId, familyId)
+        .first<{ id: string; type: string }>()
+      if (!fundingSource?.id) {
+        return c.json(jsonError('funding_source_payment_method_id is invalid'), 400)
+      }
+      if ((type === 'card' || type === 'postpaid') && fundingSource.type !== 'bank') {
+        return c.json(jsonError('funding_source_payment_method_id must be a bank account for deferred payments'), 400)
+      }
+      if (
+        type === 'emoney' &&
+        fundingSource.type !== 'bank' &&
+        fundingSource.type !== 'card' &&
+        fundingSource.type !== 'postpaid'
+      ) {
+        return c.json(jsonError('funding_source_payment_method_id must be a bank account or deferred payment for emoney'), 400)
       }
     }
 
@@ -169,6 +189,12 @@ export const registerPaymentMethodRoutes = (app: Hono<HonoEnv>) => {
       .bind(id, familyId)
       .first<Record<string, unknown> & { updated_at?: string; created_at?: string }>()
 
+    const existingFundingSourceId =
+      typeof existing?.funding_source_payment_method_id === 'string'
+        ? existing.funding_source_payment_method_id
+        : typeof existing?.linked_bank_payment_method_id === 'string'
+          ? existing.linked_bank_payment_method_id
+          : null
     const matchesExisting =
       !!existing &&
       existing.name === name &&
@@ -177,6 +203,7 @@ export const registerPaymentMethodRoutes = (app: Hono<HonoEnv>) => {
       existing.color === color &&
       existing.card_closing_day === cardClosingDay &&
       existing.card_payment_day === cardPaymentDay &&
+      existingFundingSourceId === fundingSourcePaymentMethodId &&
       existing.linked_bank_payment_method_id === linkedBankPaymentMethodId &&
       existing.sort_order === sortOrder
 
@@ -197,7 +224,7 @@ export const registerPaymentMethodRoutes = (app: Hono<HonoEnv>) => {
 
     await c.env.DB
       .prepare(
-        'INSERT INTO payment_methods (id, family_id, name, type, icon_key, color, card_closing_day, card_payment_day, linked_bank_payment_method_id, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, icon_key = excluded.icon_key, color = excluded.color, card_closing_day = excluded.card_closing_day, card_payment_day = excluded.card_payment_day, linked_bank_payment_method_id = excluded.linked_bank_payment_method_id, sort_order = excluded.sort_order, updated_at = excluded.updated_at'
+        'INSERT INTO payment_methods (id, family_id, name, type, icon_key, color, card_closing_day, card_payment_day, funding_source_payment_method_id, linked_bank_payment_method_id, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, icon_key = excluded.icon_key, color = excluded.color, card_closing_day = excluded.card_closing_day, card_payment_day = excluded.card_payment_day, funding_source_payment_method_id = excluded.funding_source_payment_method_id, linked_bank_payment_method_id = excluded.linked_bank_payment_method_id, sort_order = excluded.sort_order, updated_at = excluded.updated_at'
       )
       .bind(
         id,
@@ -208,6 +235,7 @@ export const registerPaymentMethodRoutes = (app: Hono<HonoEnv>) => {
         color,
         cardClosingDay,
         cardPaymentDay,
+        fundingSourcePaymentMethodId,
         linkedBankPaymentMethodId,
         sortOrder,
         createdAt,

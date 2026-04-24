@@ -11,13 +11,13 @@ type State = {
   type: PaymentType
   cardClosingDay: string
   cardPaymentDay: string
-  linkedBankPaymentMethodId: string
+  fundingSourcePaymentMethodId: string
   editingMethod: PaymentMethod | null
   editName: string
   editType: PaymentType
   editCardClosingDay: string
   editCardPaymentDay: string
-  editLinkedBankPaymentMethodId: string
+  editFundingSourcePaymentMethodId: string
   editIconKey: string | null
   editColor: string
 }
@@ -33,13 +33,13 @@ const createInitialState = (defaultType: PaymentType): State => ({
   type: defaultType,
   cardClosingDay: '',
   cardPaymentDay: '',
-  linkedBankPaymentMethodId: '',
+  fundingSourcePaymentMethodId: '',
   editingMethod: null,
   editName: '',
   editType: defaultType,
   editCardClosingDay: '',
   editCardPaymentDay: '',
-  editLinkedBankPaymentMethodId: '',
+  editFundingSourcePaymentMethodId: '',
   editIconKey: null,
   editColor: CATEGORY_COLORS[0],
 })
@@ -58,7 +58,8 @@ const reducer = (state: State, action: Action): State => {
         editType: normalizedType,
         editCardClosingDay: dayToInputValue(normalizeDayOfMonth(method.card_closing_day)),
         editCardPaymentDay: dayToInputValue(normalizeDayOfMonth(method.card_payment_day)),
-        editLinkedBankPaymentMethodId: method.linked_bank_payment_method_id ?? '',
+        editFundingSourcePaymentMethodId:
+          method.funding_source_payment_method_id ?? method.linked_bank_payment_method_id ?? '',
         editIconKey: method.icon_key ?? getPaymentFallbackIconKey(method.type),
         editColor: method.color ?? CATEGORY_COLORS[0],
       }

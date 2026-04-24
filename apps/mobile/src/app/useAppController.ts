@@ -11,6 +11,7 @@ import { createInitialAppState } from './state/appState'
 import { appReducer } from './state/appReducer'
 import {
   backFromPage,
+  changeBalanceMonth,
   changeEntrySeedType,
   changeHistoryMonth,
   changePreferredEntryType,
@@ -235,7 +236,7 @@ export const useAppController = () => {
       type: string
       cardClosingDay: number | null
       cardPaymentDay: number | null
-      linkedBankPaymentMethodId: string | null
+      fundingSourcePaymentMethodId: string | null
     }) => {
       await addPaymentMethod({ ...params, orderedMethods: orderedPaymentMethods })
       void runSync()
@@ -400,6 +401,7 @@ export const useAppController = () => {
         handleOpenPaymentMethodEntities,
         handleBack,
         setHistoryMonthYm: (ym: string) => dispatch(changeHistoryMonth(ym)),
+        setBalanceMonthYm: (ym: string) => dispatch(changeBalanceMonth(ym)),
         selectHome: () => dispatch(selectMainTab('home')),
         selectHistory: () => dispatch(selectMainTab('history')),
         selectReports: () => dispatch(selectMainTab('reports')),

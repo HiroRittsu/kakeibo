@@ -77,7 +77,7 @@ export const EntryInputPage = ({
   const paymentColor = selectedPaymentMethod ? getPaymentColor(selectedPaymentMethod) : PAYMENT_DEFAULT_COLORS.cash
   const paymentSoftColor = paymentColor.startsWith('#') && paymentColor.length === 7 ? `${paymentColor}1f` : '#f8fbff'
   const paymentGroups = useMemo(() => {
-    const groupOrder = ['cash', 'card', 'emoney', 'bank'] as const
+    const groupOrder = ['cash', 'card', 'postpaid', 'emoney', 'bank'] as const
     return groupOrder
       .map((type) => ({
         type,

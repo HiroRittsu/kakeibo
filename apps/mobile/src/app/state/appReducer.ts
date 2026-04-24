@@ -34,6 +34,8 @@ export const appReducer = (state: AppState, action: AppAction): AppState => {
       return { ...state, sync: { ...state.sync, toast: null } }
     case 'HISTORY_MONTH_CHANGED':
       return { ...state, context: { ...state.context, historyMonthYm: action.payload } }
+    case 'BALANCE_MONTH_CHANGED':
+      return { ...state, context: { ...state.context, balanceMonthYm: action.payload } }
     case 'PREFERRED_ENTRY_TYPE_CHANGED':
       return { ...state, context: { ...state.context, preferredEntryType: action.payload } }
     case 'ENTRY_SEED_TYPE_CHANGED':
@@ -175,6 +177,7 @@ export const appReducer = (state: AppState, action: AppAction): AppState => {
           reportCategorySeed: null,
           paymentMethodSeed: null,
           preferredEntryType: 'expense',
+          balanceMonthYm: state.context.balanceMonthYm,
         },
       }
     default:
